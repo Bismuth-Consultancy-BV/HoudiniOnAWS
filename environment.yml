@@ -1,0 +1,15 @@
+name: aurora_env
+channels:
+  # conda-forge is a community-driven collection of recipes for the conda package manager.
+  # If you wish to use a more "secure" channel such as defaults, you can add it here. Please
+  # note that it may require a license depending on your organization and use-case.
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - requests
+  - tqdm
+  - boto3
+  - pip:
+    - sesiweb
+    - numpy==1.24.4

@@ -1,0 +1,6 @@
+# Force shell scripts to always use LF line endings
+*.sh text eol=lf
+*.hcl text eol=lf
+*.tfstate text eol=lf
+*.lock.info text eol=lf
+*.tfstate.backup text eol=lf

@@ -1,0 +1,5 @@
+{
+    "aws_region": "eu-north-1",
+    "request_queue_url": "https://sqs.eu-north-1.amazonaws.com/423623865516/aurora-request-message-queue",
+    "response_queue_url": "https://sqs.eu-north-1.amazonaws.com/423623865516/aurora-response-message-queue"
+}

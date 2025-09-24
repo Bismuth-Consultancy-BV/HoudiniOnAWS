@@ -1,0 +1,10 @@
+infra/provisioning/building/.terraform/providers/
+infra/provisioning/deployment/.terraform/providers/
+infra/provisioning/aurora-key-pair.pem
+**/__pycache__/**
+SHARED/*
+infra/provisioning/deployment/lambda_function.zip
+logs/runtime.log
+*.tfstate
+*.tfstate.backup
+*.lock.hcl
