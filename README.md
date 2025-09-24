@@ -3,6 +3,8 @@ Project Aurora allows you to easily set up a containerized Houdini environment o
 
 This repo is meant to be used as a sample by Pipeline TDs to learn about the possibilities of cloud compute for Houdini. The README explains how to use all the different functionality provided, but is by no means meant to be a tutorial educating you about Houdini/AWS/Docker.
 
+![InfrastructureDiagram](InfrastructureDiagram.jpg)
+
 ## Getting Started
 
 > [!WARNING]
