@@ -37,10 +37,10 @@ def main(args):
         require_admin()
         print("Destroying all resources...")
 
-        for dir_name in ["building", "deployment"]:
-            build_dir = os.path.join(
+        for dir_name in ["building", "deployment/batch", "deployment/session"]:
+            build_dir = os.path.normpath(os.path.join(
                 os.path.dirname(os.path.realpath(__file__)), "provisioning", dir_name
-            )
+            ))
             print(f"Destroying resources in {build_dir}...")
             terraform_vars = {
                 "aws_region": aws_region,
@@ -49,7 +49,7 @@ def main(args):
             if dir_name == "building":
                 terraform_vars["github_credentials_name"] = GITHUB_CREDENTIALS_NAME
 
-            if dir_name == "deployment":
+            if dir_name == "deployment/batch" or dir_name == "deployment/session":
                 terraform_vars["aurora_ami_name"] = AMI_NAME
             terraform_destroy(terraform_vars, build_dir)
 
@@ -211,7 +211,7 @@ def main(args):
             hcl_file,
         )
 
-    if args.provision_aws:
+    if args.provision_batch_aws:
         # Make sure the script is running with admin privileges
         require_admin()
 
@@ -220,6 +220,7 @@ def main(args):
                 os.path.dirname(os.path.realpath(__file__)),
                 "provisioning",
                 "deployment",
+                "batch",
             )
         )
 
@@ -253,9 +254,9 @@ if __name__ == "__main__":
         help="Build AWS AMI. Requires admin privileges.",
         action="store_true",
     )
-    provision_aws = argparse.add_argument(
-        "--provision_aws",
-        help="Provision AWS infrastructure. Requires admin privileges.",
+    provision_batch_aws = argparse.add_argument(
+        "--provision_batch_aws",
+        help="Provision AWS batch infrastructure. Requires admin privileges.",
         action="store_true",
     )
     aws_keypair = argparse.add_argument(

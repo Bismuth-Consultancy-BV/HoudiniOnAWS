@@ -5,7 +5,7 @@ import sys
 import time
 from typing import Dict, Any
 
-AURORA_TOOLING_ROOT = os.getenv("AURORA_TOOLING_ROOT", "")
+AURORA_TOOLING_ROOT = os.getenv("AURORA_TOOLING_ROOT")
 if not AURORA_TOOLING_ROOT:
     raise ValueError("AURORA_TOOLING_ROOT environment variable is not set.")
 if AURORA_TOOLING_ROOT not in sys.path:

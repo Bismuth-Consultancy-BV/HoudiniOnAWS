@@ -63,7 +63,7 @@ To test the docker setup locally; For example to debug or develop easily you can
 > ```
 
 > [!WARNING]
-> You will want to modify the IP address in [provision_cloud.tf](infra\provisioning\deployment\provision_cloud.tf) from `0.0.0.0` to your own IP. This improves security and allows you to SSH into the EC2 instances.
+> You will want to modify the IP address in [provision_batch.tf](infra\provisioning\deployment\batch\provision_batch.tf) from `0.0.0.0` to your own IP. This improves security and allows you to SSH into the EC2 instances.
 
 
 #### 1. Building Docker Image
@@ -183,7 +183,7 @@ This will start building an AMI which can later be used to run the containerized
 
 To provision the AWS Infrastructure, you can run the following command:
 ```bash
-python infra/build_util.py --provision_aws
+python infra/build_util.py --provision_batch_aws
 ```
 This provision the AWS Infrastructure, which will be used to run all the cloud compute with Houdini.
 </details>
@@ -284,7 +284,7 @@ To do so, several things will need to be done:
 - Provisioning: runtime cloud stack (Terraform)
 
   <i>If you wish to modify how the AWS Infrastructure works or is configured, these are the relevant files for you.</i>
-  - [infra/provisioning/deployment/provision_cloud.tf](infra/provisioning/deployment/provision_cloud.tf) - Full runtime stack (VPC, subnets, NAT, SQS/SNS, Lambda, ECS/EC2 wiring) and resolves the latest AMI built by the step above.
+  - [infra/provisioning/deployment/batch/provision_batch.tf](infra/provisioning/deployment/batch/provision_batch.tf) - Full runtime stack (VPC, subnets, NAT, SQS/SNS, Lambda, ECS/EC2 wiring) and resolves the latest AMI built by the step above.
 
 - Runtime (what executes on the instance/container)
   

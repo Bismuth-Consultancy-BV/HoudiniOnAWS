@@ -1,4 +1,4 @@
-#!/bin/bash -u
+﻿#!/bin/bash -u
 set -e  # Exit on error
 
 # Default values
