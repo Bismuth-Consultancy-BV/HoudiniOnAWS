@@ -12,4 +12,5 @@ dependencies:
   - boto3
   - pip:
     - sesiweb
-    - numpy==1.24.4
+    - websockets
+    - numpy==1.26.4

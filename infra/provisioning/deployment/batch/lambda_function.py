@@ -17,7 +17,7 @@ def lambda_handler(event, context):
     try:
         # Retrieve environment variables
         launch_template_name = os.environ["LAUNCH_TEMPLATE_NAME"]
-        launch_template_version = os.environ.get("LAUNCH_TEMPLATE_VERSION", "$Latest")
+        launch_template_version = os.environ["LAUNCH_TEMPLATE_VERSION"]
         subnet_id = os.environ["SUBNET_ID"]
         security_group_id = os.environ["SECURITY_GROUP_ID"]
 
@@ -27,7 +27,7 @@ def lambda_handler(event, context):
         print(f"Security Group ID: {security_group_id}")
 
         # Extract messages from the event
-        messages = event.get("Records", [])
+        messages = event["Records"]
         num_messages = len(messages)
 
         if num_messages > 0:

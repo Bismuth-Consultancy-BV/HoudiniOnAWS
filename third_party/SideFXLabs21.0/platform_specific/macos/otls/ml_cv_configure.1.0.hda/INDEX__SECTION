@@ -1,0 +1,15 @@
+Operator:     labs::ml_cv_configure::1.0
+Label:        Labs ML CV Configure
+Path:         oplib:/labs::Data/ml_cv_configure::1.0?labs::Data/ml_cv_configure::1.0
+Icon:         
+Table:        Data
+License:      
+Extra:        
+User:         
+Inputs:       0 to 0
+Outputs:      0
+Subnet:       false
+Python:       false
+Empty:        false
+Modified:     Sat Apr 19 21:28:43 2025
+

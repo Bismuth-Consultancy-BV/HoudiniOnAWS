@@ -1,0 +1,14 @@
+Operator:     labs::exoside_quadremesher::1.2
+Label:        Labs Exoside QuadRemesher
+Path:         oplib:/labs::Sop/exoside_quadremesher::1.2?labs::Sop/exoside_quadremesher::1.2
+Icon:         opdef:/labs::Sop/exoside_quadremesher::1.2?IconImage
+Table:        Sop
+License:      
+Extra:        inputcolors='1 "RGB 0.700195 0.700195 0.700195" ' outputcolors='1 "RGB 0.700195 0.700195 0.700195" ' 
+User:         
+Inputs:       1 to 1
+Subnet:       true
+Python:       false
+Empty:        false
+Modified:     Mon Dec  9 11:42:57 2024
+

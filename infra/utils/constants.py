@@ -3,7 +3,8 @@ This file contains some constants you can change to control specific constants u
 """
 
 # This is the prefix used for the generated AMI while building.
-AMI_NAME = "HoudiniOnAWS-AMI"
+BATCH_AMI_NAME = "HoudiniOnAWS-batch-AMI"
+SESSION_AMI_NAME = "HoudiniOnAWS-session-AMI"
 
 # These are the names of the credentials in the secretsmanager on AWS.
 # SideFXOAuthCredentials should contain a JSON with `client_id` and `client_secret` keys.

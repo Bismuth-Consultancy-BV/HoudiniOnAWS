@@ -1,0 +1,6 @@
+# Default dialog script for labs::ml_cv_configure::1.0
+{
+    name	labs::ml_cv_configure::1.0
+    script	labs::ml_cv_configure::1.0
+    label	"Labs ML CV Configure"
+}

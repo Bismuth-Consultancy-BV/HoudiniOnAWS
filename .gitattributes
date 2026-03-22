@@ -4,3 +4,6 @@
 *.tfstate text eol=lf
 *.lock.info text eol=lf
 *.tfstate.backup text eol=lf
+*.hda filter=lfs diff=lfs merge=lfs -text
+*.hip filter=lfs diff=lfs merge=lfs -text
+*.bgeo.sc filter=lfs diff=lfs merge=lfs -text

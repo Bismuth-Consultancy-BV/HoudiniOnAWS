@@ -1,10 +1,6 @@
 # Provisioning Intermediate Files
 infra/provisioning/building/.terraform/
-
-# Batch Intermediate Files
-infra/provisioning/deployment/batch/.terraform/
-infra/provisioning/deployment/batch/lambda_function.zip
-
+infra/provisioning/deployment/.terraform/
 
 # Session Intermediate Files
 **/__pycache__/**
@@ -12,9 +8,14 @@ SHARED/*
 logs/runtime.log
 
 # Terraform state files
-*.tfstate
-*.tfstate.backup
-*.lock.hcl
+# *.tfstate
+# *.tfstate.backup
+# *.lock.hcl
 
 # Private files
 infra/provisioning/aurora-key-pair.pem
+runtime/session/output.glb
+*_bak*.hip
+*_bak*.hda
+/samples/backup
+*.DS_Store

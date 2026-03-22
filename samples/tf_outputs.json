@@ -1,5 +1,16 @@
 {
     "aws_region": "eu-north-1",
+    "input_bucket_name": "aurora-input-bucket",
+    "launch_template_id": "lt-0589e0822b65ce8a1",
+    "launch_template_name": "aurora-batch-20260214230220360600000004",
+    "output_bucket_name": "aurora-output-bucket",
+    "private_subnet_id": "subnet-0e67ff4df1bfde3b0",
+    "public_subnet_id": "subnet-0f1671f7515ff207e",
     "request_queue_url": "https://sqs.eu-north-1.amazonaws.com/423623865516/aurora-request-message-queue",
-    "response_queue_url": "https://sqs.eu-north-1.amazonaws.com/423623865516/aurora-response-message-queue"
+    "response_queue_url": "https://sqs.eu-north-1.amazonaws.com/423623865516/aurora-response-message-queue",
+    "security_group_id": "sg-01b3e9d0077f9f6ba",
+    "session_launch_template_name": "aurora-session-20260214230220360000000002",
+    "sessions_table_name": "aurora-session-table",
+    "vpc_id": "vpc-03311ec7aaf072001",
+    "websocket_url": "wss://kbv73t4jhj.execute-api.eu-north-1.amazonaws.com/production"
 }

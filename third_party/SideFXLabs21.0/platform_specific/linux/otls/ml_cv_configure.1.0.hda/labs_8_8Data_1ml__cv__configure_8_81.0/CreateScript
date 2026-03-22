@@ -1,0 +1,16 @@
+\set noalias = 1
+#
+#  Creation script for labs::ml_cv_configure::1.0 operator
+#
+
+if ( "$arg1" == "" ) then
+    echo This script is intended as a creation script
+    exit
+endif
+
+# Node $arg1
+opcf $arg1
+
+# Internal node creation and initialization goes here.
+
+opcf ..

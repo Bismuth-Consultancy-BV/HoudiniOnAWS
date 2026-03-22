@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Houdini Aurora Session</title>
+    <link rel="stylesheet" href="session_tool_demo.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+
+<body>
+
+    <!-- Landing Screen -->
+    <div id="landingScreen" class="landing">
+        <div class="landing-card">
+            <h2>Houdini Aurora Session</h2>
+            <p class="landing-subtitle">Use Houdini Digital Assets interactively in the cloud</p>
+            <button id="initializeBtn" class="btn btn-primary">Start Session</button>
+            <div id="uploadError" class="upload-error"></div>
+        </div>
+    </div>
+
+    <!-- Hidden file input for HDA loading via menu -->
+    <input type="file" id="hdaFileInput" accept=".hda" style="display: none;">
+
+    <!-- Main Application Container -->
+    <div id="appContainer" class="container hidden">
+
+        <!-- Menu Bar -->
+        <div class="menu-bar" id="menuBar">
+            <div class="menu-item">
+                <button class="menu-button">Session</button>
+                <div class="menu-dropdown">
+                    <button class="menu-option" id="menuLoadHDABtn" data-action="load-hda">
+                        <span class="menu-icon">📂</span> Load HDA
+                    </button>
+                    <div class="menu-divider"></div>
+                    <button class="menu-option menu-option-danger" id="menuTerminateBtn" data-action="terminate">
+                        <span class="menu-icon">⏹</span> Terminate
+                    </button>
+                </div>
+            </div>
+            <div class="menu-item">
+                <button class="menu-button">Scene</button>
+                <div class="menu-dropdown">
+                    <button class="menu-option" id="menuExportBtn" data-action="export">
+                        <span class="menu-icon">💾</span> Export
+                    </button>
+                </div>
+            </div>
+            <div class="menu-spacer"></div>
+            <div class="menu-hda-name" id="menuHdaName"></div>
+            <div class="menu-status" id="menuStatus">Disconnected</div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+
+            <!-- 3D Viewer -->
+            <div class="viewer">
+                <div id="viewerMount" class="geometry-viewer"></div>
+                <img src="resources/bismuth_logo.svg" alt="Bismuth" class="bismuth-logo">
+                <div class="geometry-info" id="geometryInfo" style="display: none;">
+                    <div><strong>Geometry Info</strong></div>
+                    <div>Points: <span id="pointCount">-</span></div>
+                    <div>Primitives: <span id="primCount">-</span></div>
+                </div>
+
+                <!-- Log Console -->
+                <div id="logConsole" class="log-console collapsed">
+                    <div class="log-console-header">
+                        <span class="log-console-title">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="4 17 10 11 4 5"></polyline>
+                                <line x1="12" y1="19" x2="20" y2="19"></line>
+                            </svg>
+                            Houdini Console
+                        </span>
+                        <span class="log-console-toggle">▲</span>
+                    </div>
+                    <div class="log-console-body">
+                        <div id="logMessages" class="log-messages"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar Controls -->
+            <div class="sidebar">
+                <div class="section" id="loadingSection">
+                    <div class="loading-spinner-container">
+                        <div class="spinner"></div>
+                        <p class="loading-text" id="loadingText">Starting session...</p>
+                    </div>
+                </div>
+                <div class="section" id="emptyState" style="display: none;">
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" viewBox="0 0 24 24"
+                            stroke="#a0aec0" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round"
+                                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                        <p>No HDA loaded</p>
+                        <small>Use <strong>Session → Load HDA</strong> to get started</small>
+                    </div>
+                </div>
+                <div class="section" id="parametersSection" style="display: none;">
+                    <h3>Parameters</h3>
+                    <div id="parametersContainer"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Geometry Loading Indicator -->
+        <div id="geometryLoader" class="geometry-loader" style="display: none;">
+            <div class="geometry-loader-spinner"></div>
+            <div class="geometry-loader-text">Houdini is cooking...</div>
+        </div>
+    </div>
+
+    <!-- Application bootstrap (all logic lives in aurora/app.js) -->
+    <script type="module">
+        import { CONFIG } from './config.js';
+        import { AuroraApp } from './aurora/index.js';
+
+        const app = new AuroraApp(CONFIG);
+        window.addEventListener('load', () => app.mount());
+    </script>
+</body>
+
+</html>
