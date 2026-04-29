@@ -63,7 +63,7 @@ To test the docker setup locally; For example to debug or develop easily you can
 > ```
 
 > [!WARNING]
-> You will want to modify the IP address in [provision_batch.tf](infra/provisioning/deployment/provision_batch.tf) from `0.0.0.0` to your own IP. This improves security and allows you to SSH into the EC2 instances.
+> You will want to modify the `admin_ip_access` variable in [shared_infra.tf](infra/provisioning/deployment/shared_infra.tf) from `0.0.0.0/0` to your own IP. This improves security and allows you to SSH into the EC2 instances.
 
 
 #### 1. Building Docker Image
@@ -385,8 +385,11 @@ You will also need to log into the [AWS console](https://aws.amazon.com/console/
 - Provisioning: runtime cloud stack (Terraform)
 
   <i>If you wish to modify how the AWS Infrastructure works or is configured, these are the relevant files for you.</i>
-  - [infra/provisioning/deployment/batch/provision_batch.tf](infra/provisioning/deployment/batch/provision_batch.tf) - Full runtime stack (VPC, subnets, NAT, SQS/SNS, Lambda, ECS/EC2 wiring) and resolves the latest AMI built by the step above.
-  - [infra/provisioning/deployment/provision_session.tf](infra/provisioning/deployment/provision_session.tf) - Session runtime stack (WebSocket API Gateway, Lambda functions, DynamoDB session table, EC2 launch template).
+  - [infra/provisioning/deployment/shared_infra.tf](infra/provisioning/deployment/shared_infra.tf) - Shared infrastructure used by both batch and session modes (VPC, subnets, NAT, S3 buckets, IAM, security groups). Defines the `admin_ip_access` variable used to restrict SSH.
+  - [infra/provisioning/deployment/provision_batch.tf](infra/provisioning/deployment/provision_batch.tf) - Batch-mode runtime stack (SQS/SNS, Lambda, ECS/EC2 wiring) and resolves the latest batch AMI built by the step above.
+  - [infra/provisioning/deployment/provision_session.tf](infra/provisioning/deployment/provision_session.tf) - Session-mode runtime stack (WebSocket API Gateway, Lambda functions, DynamoDB session table, EC2 launch template).
+  - [infra/provisioning/deployment/batch/lambda_function.py](infra/provisioning/deployment/batch/lambda_function.py) - Lambda handler that launches a batch EC2 instance from an SQS message.
+  - [infra/provisioning/deployment/session/lambda_websocket_handler.py](infra/provisioning/deployment/session/lambda_websocket_handler.py) - Lambda handler for WebSocket connect/disconnect/route messages used by session mode.
 
 - Runtime (what executes on the instance/container)
   
@@ -439,6 +442,7 @@ You will also need to log into the [AWS console](https://aws.amazon.com/console/
 - If you run into an error during the building of the AMI, where packer complains about permissions on the `.pem` key (`Permission denied (publickey)`), ensure you "Disable Inheritance" on the `<pem key>` on windows, and change the permissions on Linux with `chmod 400 <pem key>`.
 - If you get any errors about resources not existing on AWS, check that the region you used in `aws configure` matches what you use when logged in on AWS console.
 - If you run into this error: `Error launching source instance: VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 0 allows for the instance bucket that the specified instance type belongs to.` please revisit the [prerequisites](#prerequisites) section at the top of this README referring to ensuring you have sufficient `service quota`.
+- If environment variables do not get recognized in your terminal, ensure you created the environment variables in the system section and not the user section.
 
 
 ## Acknowledgements

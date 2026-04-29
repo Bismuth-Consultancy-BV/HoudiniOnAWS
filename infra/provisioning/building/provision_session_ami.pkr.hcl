@@ -18,7 +18,7 @@ variable "provisioning_storage_capacity" {
 # Link to Github repository containing the tooling.
 # No https:// prefix is required, since a PAT will be prefixed to authenticate.
 variable "tooling_repo" {
-  default = "github.com/Ambrosiussen/HoudiniOnAWS.git"
+  default = "github.com/Bismuth-Consultancy-BV/HoudiniOnAWS.git"
 }
 
 variable "tooling_repo_branch" {
