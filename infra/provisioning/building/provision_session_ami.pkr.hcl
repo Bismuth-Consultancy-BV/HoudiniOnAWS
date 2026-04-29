@@ -25,12 +25,6 @@ variable "tooling_repo_branch" {
   default = "main"
 }
 
-# Branch (or tag) of the public SideFXLabs repo to clone into third_party/SideFXLabs21.0.
-# The destination folder name must match the $SIDEFXLABS path in third_party/SideFXLabs21.0.json.
-variable "sidefxlabs_branch" {
-  default = "Production/21.0"
-}
-
 # Instance type for the EC2 instance used for building the AMI
 variable "instance_type" {
   default = "g4dn.2xlarge"
@@ -266,10 +260,11 @@ build {
       "echo '{\"package_path\": \"$AURORA_TOOLING_ROOT/third_party/\"}' | sudo tee $HOUDINI_USER_PREF_DIR/packages/Aurora.json > /dev/null",
       "sudo chown ubuntu:ubuntu $HOUDINI_USER_PREF_DIR/packages/Aurora.json",
 
-      # Clone SideFXLabs into the tooling's third_party directory.
+      # Clone SideFXLabs into the tooling's third_party directory and pin to a commit matching the Houdini version.
       # The destination folder name must match the $SIDEFXLABS path in SideFXLabs21.0.json.
       # To add more third-party packages, clone them here and ship a matching package JSON in the tooling repo's third_party/ directory.
-      "sudo git clone --branch Production/21.0 --depth 1 https://github.com/sideeffects/SideFXLabs.git $AURORA_TOOLING_ROOT/third_party/SideFXLabs21.0",
+      "sudo git clone --branch Development https://github.com/sideeffects/SideFXLabs.git $AURORA_TOOLING_ROOT/third_party/SideFXLabs21.0",
+      "sudo git -C $AURORA_TOOLING_ROOT/third_party/SideFXLabs21.0 checkout ea8f8b1c2c6d7c1b0240de354a198ae5cbf7bedf",
       "sudo chown -R ubuntu:ubuntu $AURORA_TOOLING_ROOT/third_party/SideFXLabs21.0",
     ]
   }
