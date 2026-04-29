@@ -1,15 +1,38 @@
+import logging
 import os
+import platform
 import subprocess
 import time
-import platform
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# ── Linux GPU / display mounts required for headless Houdini (Vulkan) ──
+_LINUX_VOLUME_MOUNTS: List[str] = [
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "/run/user/1000:/run/user/1000",
+    "/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro",
+    "/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0:/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0:ro",
+    "/usr/lib/x86_64-linux-gnu/libvulkan.so.1:/usr/lib/x86_64-linux-gnu/libvulkan.so.1:ro",
+]
+
+# ── Container environment variables for NVIDIA / Houdini ──
+_CONTAINER_ENV: Dict[str, str] = {
+    "NVIDIA_DRIVER_CAPABILITIES": "all",
+    "NVIDIA_VISIBLE_DEVICES": "all",
+    "HOUDINI_OCL_DEVICETYPE": "CPU",
+    "SDL_VIDEODRIVER": "dummy",
+    "DISPLAY": ":99",
+    "HOUDINI_VULKAN_VIEWER": "0",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+}
 
 
 def cleanup_docker_container(service_name: str) -> None:
     """
     Ensures any running container for the given service is stopped and removed.
     """
-    print(f"Ensuring {service_name} container is terminated...")
+    logger.info("Ensuring %s container is terminated...", service_name)
 
     try:
         # Get running container ID for the service
@@ -22,21 +45,21 @@ def cleanup_docker_container(service_name: str) -> None:
         )
 
         if container_id:
-            print(f"Stopping and removing container: {container_id}")
+            logger.info("Stopping and removing container: %s", container_id)
             try:
                 subprocess.run(["docker", "stop", container_id], check=True)
             except subprocess.CalledProcessError as e:
-                print(f"Warning: Failed to stop container {container_id}: {e}")
+                logger.warning("Failed to stop container %s: %s", container_id, e)
 
             try:
                 subprocess.run(["docker", "rm", "-f", container_id], check=True)
             except subprocess.CalledProcessError as e:
-                print(f"Warning: Failed to remove container {container_id}: {e}")
+                logger.warning("Failed to remove container %s: %s", container_id, e)
         else:
-            print(f"No running container found for service: {service_name}")
+            logger.info("No running container found for service: %s", service_name)
 
     except subprocess.CalledProcessError as e:
-        print(f"Error checking running containers: {e}")
+        logger.error("Error checking running containers: %s", e)
 
 
 def run_docker_compose_script_stream(
@@ -75,39 +98,17 @@ def run_docker_compose_script_stream(
                 raise ValueError(f"Mount path does not exist: {mount_path}")
             cmd.extend(["-v", f"{mount_path}:{mount_target}:rw"])
 
-    # Mount vulkan specific files. These are required for Unreal to work correctly.
+    # Mount vulkan specific files. These are required for Houdini to work correctly.
     if platform.system() == "Linux":
-        cmd.extend(["-v", "/tmp/.X11-unix:/tmp/.X11-unix"])
-        cmd.extend(["-v", "/run/user/1000:/run/user/1000"])
-        cmd.extend(["-v", "/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro"])
-        cmd.extend(
-            [
-                "-v",
-                "/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0:/usr/lib/x86_64-linux-gnu/libGLX_nvidia.so.0:ro",
-            ]
-        )
-        cmd.extend(
-            [
-                "-v",
-                "/usr/lib/x86_64-linux-gnu/libvulkan.so.1:/usr/lib/x86_64-linux-gnu/libvulkan.so.1:ro",
-            ]
-        )
+        for vol in _LINUX_VOLUME_MOUNTS:
+            cmd.extend(["-v", vol])
 
     if extra_docker_args:
         cmd.extend(extra_docker_args)
 
-    if environment:
-        for key, value in environment.items():
-            cmd.extend(["-e", f"{key}={value}"])
-
-    # Passing in NVIDIA env vars
-    cmd.extend(["-e", "NVIDIA_DRIVER_CAPABILITIES=all"])
-    cmd.extend(["-e", "NVIDIA_VISIBLE_DEVICES=all"])
-    cmd.extend(["-e", "HOUDINI_OCL_DEVICETYPE=CPU"])
-    cmd.extend(["-e", "SDL_VIDEODRIVER=dummy"])
-    cmd.extend(["-e", "DISPLAY=:99"])
-    cmd.extend(["-e", "HOUDINI_VULKAN_VIEWER=0"])
-    cmd.extend(["-e", "XDG_RUNTIME_DIR=/run/user/1000"])
+    # Inject GPU / Houdini environment variables
+    for key, value in {**_CONTAINER_ENV, **(environment or {})}.items():
+        cmd.extend(["-e", f"{key}={value}"])
 
     cmd.append(service_name)
     cmd.append(script_path)
@@ -123,31 +124,32 @@ def run_docker_compose_script_stream(
         )
         log_dir = os.path.expandvars("$AURORA_TOOLING_ROOT/logs")
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "runtime.log")
-        with open(log_file, "w", encoding="utf-8") as log_file:
+        log_path = os.path.join(log_dir, "runtime.log")
+        with open(log_path, "w", encoding="utf-8") as log_fh:
             command = " ".join(cmd)
-            print(f"Running Docker command: {command}")
-            log_file.write(f"Running Docker command: {command}")
-            log_file.flush()
+            logger.info("Running Docker command: %s", command)
+            log_fh.write(f"Running Docker command: {command}\n")
+            log_fh.flush()
             while True:
                 output = process.stdout.readline()
                 if process.poll() is not None:
                     break
 
                 if output:
-                    print(output.strip())
-                    log_file.write(output)
-                    log_file.flush()
+                    logger.info(output.strip())
+                    log_fh.write(output)
+                    log_fh.flush()
 
                 # Enforce timeout
                 if time.time() - start_time > timeout:
-                    print(
-                        f"Timeout reached! Killing Docker container for {service_name}."
+                    logger.warning(
+                        "Timeout reached! Killing Docker container for %s.",
+                        service_name,
                     )
                     process.terminate()
                     break
     except Exception as e:
-        print(f"Error running command: {e}")
+        logger.error("Error running command: %s", e)
         raise
     finally:
         # Ensures the returncode gets set

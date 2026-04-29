@@ -1,8 +1,12 @@
-import boto3
 import json
+import logging
 import subprocess
+
+import boto3
 import requests
 from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
 
 
 def get_aws_user_id() -> str:
@@ -28,24 +32,29 @@ def get_aws_region() -> str:
             capture_output=True,
             text=True,
         )
-        
+
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except Exception:
         pass
-    
+
     # Fallback to EC2 metadata if available, this is useful for running on EC2 instances.
     try:
-        
-        response = requests.get('http://169.254.169.254/latest/meta-data/placement/region', timeout=0.5)
+
+        response = requests.get(
+            "http://169.254.169.254/latest/meta-data/placement/region", timeout=0.5
+        )
         if response.status_code == 200:
             region = response.text.strip()
-            print(f"Using region from EC2 metadata: {region}")
+            logger.info("Using region from EC2 metadata: %s", region)
             return region
     except Exception:
         pass
 
-    raise RuntimeError("Error using AWS CLI to get region. Did you set the region using 'aws configure'?")
+    raise RuntimeError(
+        "Error using AWS CLI to get region. Did you set the region using 'aws configure'?"
+    )
+
 
 def get_aws_secrets(aws_region: str, secret_name: str) -> dict:
     """Retrieve credentials from AWS Secrets Manager"""
@@ -53,13 +62,15 @@ def get_aws_secrets(aws_region: str, secret_name: str) -> dict:
         session = boto3.session.Session()
         client = session.client(service_name="secretsmanager", region_name=aws_region)
 
-        print(f"Retrieving {secret_name} credentials from AWS Secrets Manager...")
+        logger.info(
+            "Retrieving %s credentials from AWS Secrets Manager...", secret_name
+        )
         get_secret_value_response = client.get_secret_value(SecretId=secret_name)
         return json.loads(get_secret_value_response["SecretString"])
 
     except ClientError as e:
-        print(f"Error retrieving credentials from AWS Secrets Manager: {e}")
+        logger.error("Error retrieving credentials from AWS Secrets Manager: %s", e)
         raise
     except json.JSONDecodeError as e:
-        print(f"Error parsing credentials JSON: {e}")
+        logger.error("Error parsing credentials JSON: %s", e)
         raise

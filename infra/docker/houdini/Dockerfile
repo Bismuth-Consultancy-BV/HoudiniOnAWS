@@ -172,7 +172,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libhwloc-dev \
     libtinfo5 \
     libpocl2 \
-    # Qt dependencies TODO: Check if these are all necessary
+    # Qt dependencies (required for Houdini headless rendering)
     libqt5core5a \
     libqt5gui5 \
     libqt5widgets5 \

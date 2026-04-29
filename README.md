@@ -1,5 +1,5 @@
 # Project Aurora - Containerized Houdini on AWS
-Project Aurora allows you to easily set up a containerized Houdini environment on AWS. This project is a collaboration between [SideFX Software](https://www.sidefx.com/), [AWS](https://aws.amazon.com/) and [Bismuth Consultancy](http://bismuth.at/). It is provided as is, without any warranty or liability from the parties aforementioned.
+Project Aurora allows you to easily set up a containerized Houdini environment on AWS. It supports two modes: **Batch Processing** for offline job processing, and **Session Mode** for real-time interactive Houdini sessions through a web browser. This project is a collaboration between [SideFX Software](https://www.sidefx.com/), [AWS](https://aws.amazon.com/) and [Bismuth Consultancy](http://bismuth.at/). It is provided as is, without any warranty or liability from the parties aforementioned.
 
 This repo is meant to be used as a sample by Pipeline TDs to learn about the possibilities of cloud compute for Houdini. The README explains how to use all the different functionality provided, but is by no means meant to be a tutorial educating you about Houdini/AWS/Docker.
 
@@ -63,7 +63,7 @@ To test the docker setup locally; For example to debug or develop easily you can
 > ```
 
 > [!WARNING]
-> You will want to modify the IP address in [provision_cloud.tf](infra\provisioning\deployment\provision_cloud.tf) from `0.0.0.0` to your own IP. This improves security and allows you to SSH into the EC2 instances.
+> You will want to modify the `admin_ip_access` variable in [shared_infra.tf](infra/provisioning/deployment/shared_infra.tf) from `0.0.0.0/0` to your own IP. This improves security and allows you to SSH into the EC2 instances.
 
 
 #### 1. Building Docker Image
@@ -91,7 +91,7 @@ To test the provided sample (or your own data!) you can do the following:
 2. Enter conda env created earlier.
 3. Run the already built image with the following command:
 ```bash
-python runtime/run.py --process_hip --work_directive "$DATA_ROOT/houdini_directive.json"
+python runtime/batch/run.py --process_hip --work_directive "$DATA_ROOT/houdini_directive.json"
 ```
 </details>
 
@@ -111,7 +111,7 @@ In order to have a JobPackage.zip be valid, you need at least 2 things:
     - This is the houdini file used for processing. You are able to include multiple `.hip` files.
 
 #### Understanding the work_directive.json
-The work directive is a simple JSON, which contains a list with processing entries. As you can see, the JSON root element is a list (seen by the `[ ]`). This list contains dictionary entries which have all the relevant configs used by the [houdini processor](runtime/houdini/processing.py). The processor will process the entries based on the index they have in this list; This can be used to for example cook certain hip files before others. The most important elements are as follows:
+The work directive is a simple JSON, which contains a list with processing entries. As you can see, the JSON root element is a list (seen by the `[ ]`). This list contains dictionary entries which have all the relevant configs used by the [houdini processor](runtime/batch/processing.py). The processor will process the entries based on the index they have in this list; This can be used to for example cook certain hip files before others. The most important elements are as follows:
 - `enabled` - Boolean indicating if this entry should be considered for processing.
 - `hip_file` - This is the filepath to the `.hip` that should be processed. `$DATA_ROOT` should always be used to indicate the root of the `.zip` file.
 - `hip_file_debug` - (optional) This is an optional filepath you can specify (also relative to `$DATA_ROOT`), where a copy of the input `.hip` will be saved with all of its parameters set based on the `work_directive.json`. This is primarily useful for debugging. This field is <i>optional</i>.
@@ -164,28 +164,28 @@ It is recommended to either embed all (non-standard) asset definitions into the 
 
 </details>
 
-### AWS Infrastructure
+### Batch Processing on AWS
 
-#### 1. Building the AMI (Amazon Machine Image)
+#### 1. Building the Batch AMI (Amazon Machine Image)
 <details>
 <summary>Instructions</summary>
 
-To build the AMI,  run the following from the repository root:
+To build the batch AMI, run the following from the repository root:
 ```bash
 python infra/build_util.py --build_ami --keypair $AURORA_TOOLING_ROOT/infra/provisioning/aurora-key-pair.pem
 ```
 This will start building an AMI which can later be used to run the containerized Houdini on AWS!
 </details>
 
-#### 2. Provisioning AWS Infrastructure
+#### 2. Provisioning Batch Infrastructure
 <details>
 <summary>Instructions</summary>
 
-To provision the AWS Infrastructure, you can run the following command:
+To provision the batch infrastructure, you can run the following command:
 ```bash
-python infra/build_util.py --provision_aws
+python infra/build_util.py --provision_batch_aws
 ```
-This provision the AWS Infrastructure, which will be used to run all the cloud compute with Houdini.
+This provisions the AWS infrastructure (VPC, SQS/SNS, Lambda, ECS/EC2 wiring) used for batch processing with Houdini.
 </details>
 
 #### 3. Uploading Job Package to S3 Input Bucket
@@ -226,7 +226,121 @@ Once the job has been kicked off, the EC2 instance will start up and processing 
 
 </details>
 
-#### Destroying all AWS Infrastructure
+#### Extending with Unreal Engine
+This sample is currently limited to the use of Houdini on AWS, but can easily be extended to also use Unreal Engine. For example to ingest Houdini generated content through Houdini Engine, and use such content to for example automatically generate a map.
+
+To do so, several things will need to be done:
+1. Uncomment/extend the lines in [infra/building/provision_batch_ami.pkr.hcl](infra/building/provision_batch_ami.pkr.hcl) that are responsible for authenticating with GHCR and pulling the image with a pre-built UnrealEngine binary. For more information see the [documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/quick-start-guide-for-using-container-images-in-unreal-engine) Epic provides.
+    - When doing this, make sure you also change the allocated maximum disk space on the AMI, since UE uses quite a lot more disk space then Houdini.
+    - You will also need to add a new set of credentials to the Secrets Manager specific to Unreal, just like the ones described above.
+2. Uncomment/extend the lines in [runtime/batch/entrypoint.sh](runtime/batch/entrypoint.sh) that are responsible for calling upon your scripts that call Unreal inside the container.
+    - The aforementioned scripts that call Unreal and run some arbitrary script inside UE are not part of this sample.
+
+### Session Mode on AWS
+Session mode allows users to manipulate Houdini Digital Assets (HDAs) in real-time through a web browser. Instead of submitting a job to a queue, a persistent EC2 instance is launched with a WebSocket connection for bidirectional communication. Parameter changes are sent to Houdini, geometry is exported as GLTF, and the result is displayed in a 3D viewer in the browser.
+
+#### 1. Building the Session AMI
+<details>
+<summary>Instructions</summary>
+
+To build the session AMI, run the following from the repository root:
+```bash
+python infra/build_util.py --build_ami --provision_service_aws --keypair $AURORA_TOOLING_ROOT/infra/provisioning/aurora-key-pair.pem
+```
+This builds an AMI with Houdini, Vulkan drivers, and the session runtime pre-installed. It is separate from the batch AMI.
+</details>
+
+#### 2. Provisioning Session Infrastructure
+<details>
+<summary>Instructions</summary>
+
+To provision the session infrastructure, run:
+```bash
+python infra/build_util.py --provision_service_aws
+```
+This provisions the session-specific AWS resources: WebSocket API Gateway, Lambda functions for connection management, DynamoDB session table, and a dedicated EC2 launch template.
+
+After provisioning, relevant outputs (including the `websocket_url`) are saved to `samples/tf_outputs.json`.
+</details>
+
+#### 3. Configuring the Web Client
+<details>
+<summary>Instructions</summary>
+
+Edit `webapp/config.js` with the WebSocket endpoint from the provisioning output:
+```javascript
+export const CONFIG = {
+    websocket_url: "wss://your-api-id.execute-api.eu-north-1.amazonaws.com/production",
+    idle_timeout_minutes: 15,
+    idle_warning_minutes: 2,
+    region: "eu-north-1",
+    environment: "prod"
+};
+```
+The `websocket_url` can be found in `samples/tf_outputs.json` after provisioning.
+</details>
+
+#### 4. Using the Web Interface
+<details>
+<summary>Instructions</summary>
+
+Serve the webapp locally and open it in a browser:
+```bash
+cd webapp
+python -m http.server 8000
+# Visit http://localhost:8000/session_tool_demo.html
+```
+
+The workflow is:
+1. Select a `.hda` file using the file browser.
+2. Click "Initialize Session" — the file is uploaded to S3 and an EC2 instance is launched (takes 1-2 minutes).
+3. Parameters from the HDA are automatically displayed as interactive controls.
+4. Adjust parameters — geometry updates in the 3D viewer each time you release a slider.
+5. Click "Terminate Session" when done to clean up the EC2 instance.
+
+Sessions auto-terminate after the configured idle period (default: 15 minutes) to save costs.
+</details>
+
+#### 5. Using the Python Client
+<details>
+<summary>Instructions</summary>
+
+The Python client can be used for programmatic access or debugging. It reads the WebSocket URL from `samples/tf_outputs.json` automatically.
+
+Interactive mode:
+```bash
+python samples/session_tool_client.py --command interactive
+
+# Commands available in the interactive shell:
+>>> param /obj/CONTAINER/user_hda/size 5.0
+>>> status
+>>> geometry
+>>> quit
+```
+
+Programmatic usage:
+```python
+import asyncio
+from samples.session_tool_client import AuroraSessionClient
+
+async def main():
+    client = AuroraSessionClient(
+        websocket_url="wss://your-api-id.execute-api.eu-north-1.amazonaws.com/production"
+    )
+    await client.connect(hda_file="MyTool.hda")
+    await client.start_session()
+    await client.update_parameter("/obj/CONTAINER/user_hda/size", 5.0)
+    geometry_url = client.get_last_geometry_url()
+    await client.terminate()
+
+asyncio.run(main())
+```
+</details>
+
+> [!TIP]
+> Session logs can be found in [CloudWatch](https://eu-north-1.console.aws.amazon.com/cloudwatch/home?region=eu-north-1#logsV2:log-groups/log-group/$252Faws$252Fec2$252Faurora-session) under the `/aws/ec2/aurora-session` log group.
+
+### Destroying all AWS Infrastructure
 
 > [!WARNING]
 > Running the commands found below will destroy all provisioned infrastructure, including files you uploaded to the aurora input and output S3 buckets! <b>This cannot be reversed!</b>
@@ -241,17 +355,6 @@ python infra/build_util.py --destroy_all
 ```
 You will also need to log into the [AWS console](https://aws.amazon.com/console/), and manually delete all created AMI.
 </details>
-
-
-### Extending with Unreal Engine
-This sample is currently limited to the use of Houdini on AWS, but can easily be extended to also use Unreal Engine. For example to ingest Houdini generated content through Houdini Engine, and use such content to for example automatically generate a map.
-
-To do so, several things will need to be done:
-1. Uncomment/extend the lines in [infra/building/provision_ami.pkr.hcl](infra/building/provision_ami.pkr.hcl) that are responsible for authenticating with GHCR and pulling the image with a pre-built UnrealEngine binary. For more information see the [documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/quick-start-guide-for-using-container-images-in-unreal-engine) Epic provides.
-    - When doing this, make sure you also change the allocated maximum disk space on the AMI, since UE uses quite a lot more disk space then Houdini.
-    - You will also need to add a new set of credentials to the Secrets Manager specific to Unreal, just like the ones described above.
-2. Uncomment/extend the lines in [runtime/entrypoint.sh](runtime/entrypoint.sh) that are responsible for calling upon your scripts that call Unreal inside the container.
-    - The aforementioned scripts that call Unreal and run some arbitrary script inside UE are not part of this sample.
 
 
 ## Repository map: key files and what they do
@@ -276,25 +379,39 @@ To do so, several things will need to be done:
 
   <i>If you want to modify properties of the machine used for the processing is provisioned, these are the relevant files for you.</i>
   - [infra/provisioning/building/provision_ami.tf](infra/provisioning/building/provision_ami.tf) - Minimal network + IAM to let Packer build the AMI.
-  - [infra/provisioning/building/provision_ami.pkr.hcl](infra/provisioning/building/provision_ami.pkr.hcl) - Packer template that:
-    - Installs Miniconda.
-    - Clones this repo on the builder host.
-    - Creates the Conda env and invokes [infra/build_util.py](infra/build_util.py) to build Docker images inside the AMI.
+  - [infra/provisioning/building/provision_batch_ami.pkr.hcl](infra/provisioning/building/provision_batch_ami.pkr.hcl) - Packer template for batch AMI.
+  - [infra/provisioning/building/provision_session_ami.pkr.hcl](infra/provisioning/building/provision_session_ami.pkr.hcl) - Packer template for session AMI (includes Vulkan drivers).
 
 - Provisioning: runtime cloud stack (Terraform)
 
   <i>If you wish to modify how the AWS Infrastructure works or is configured, these are the relevant files for you.</i>
-  - [infra/provisioning/deployment/provision_cloud.tf](infra/provisioning/deployment/provision_cloud.tf) - Full runtime stack (VPC, subnets, NAT, SQS/SNS, Lambda, ECS/EC2 wiring) and resolves the latest AMI built by the step above.
+  - [infra/provisioning/deployment/shared_infra.tf](infra/provisioning/deployment/shared_infra.tf) - Shared infrastructure used by both batch and session modes (VPC, subnets, NAT, S3 buckets, IAM, security groups). Defines the `admin_ip_access` variable used to restrict SSH.
+  - [infra/provisioning/deployment/provision_batch.tf](infra/provisioning/deployment/provision_batch.tf) - Batch-mode runtime stack (SQS/SNS, Lambda, ECS/EC2 wiring) and resolves the latest batch AMI built by the step above.
+  - [infra/provisioning/deployment/provision_session.tf](infra/provisioning/deployment/provision_session.tf) - Session-mode runtime stack (WebSocket API Gateway, Lambda functions, DynamoDB session table, EC2 launch template).
+  - [infra/provisioning/deployment/batch/lambda_function.py](infra/provisioning/deployment/batch/lambda_function.py) - Lambda handler that launches a batch EC2 instance from an SQS message.
+  - [infra/provisioning/deployment/session/lambda_websocket_handler.py](infra/provisioning/deployment/session/lambda_websocket_handler.py) - Lambda handler for WebSocket connect/disconnect/route messages used by session mode.
 
 - Runtime (what executes on the instance/container)
   
   <i>If you wish to modify what happens when a job gets started on AWS, these are the relevant files for you.</i>
-  - [runtime/entrypoint.sh](runtime/entrypoint.sh) - Boot-time script that downloads the JobPackage from S3, runs the job, and uploads results.
-  - [runtime/run.py](runtime/run.py) - Orchestrates local or in-instance processing based on a work directive JSON.
-  - [runtime/docker/utils.py](runtime/docker/utils.py) - Helpers used during containerized execution.
-  - [runtime/s3/download_file.sh](runtime/s3/download_file.sh) - Downloads the JobPackage from S3.
-  - [runtime/s3/upload_file.sh](runtime/s3/upload_file.sh) - Uploads the JobResult back to S3.
-  - [runtime/runner.sh](runtime/runner.sh) - Convenience runner used by the image/instance.
+
+  - Batch mode
+    - [runtime/batch/entrypoint.sh](runtime/batch/entrypoint.sh) - Boot-time script that downloads the JobPackage from S3, runs the job, and uploads results.
+    - [runtime/batch/run.py](runtime/batch/run.py) - Orchestrates local or in-instance processing based on a work directive JSON.
+    - [runtime/batch/runner.sh](runtime/batch/runner.sh) - Convenience runner used by the image/instance.
+    - [runtime/batch/processing.py](runtime/batch/processing.py) - Hython script that loads a HIP file per a JSON directive and cooks outputs.
+    - [runtime/batch/docker_utils.py](runtime/batch/docker_utils.py) - Helpers used during containerized execution.
+
+  - Session mode
+    - [runtime/session/entrypoint.sh](runtime/session/entrypoint.sh) - Boot-time script for interactive session mode (two-process architecture).
+    - [runtime/session/houdini_runner.py](runtime/session/houdini_runner.py) - Hython process that loads HDA, processes parameter updates, and exports GLTF.
+    - [runtime/session/websocket_handler.py](runtime/session/websocket_handler.py) - Pure asyncio WebSocket bridge between API Gateway and the local Houdini runner.
+    - [runtime/session/hda_utils.py](runtime/session/hda_utils.py) - Utilities for installing/instantiating HDAs and extracting parameter schemas.
+    - [runtime/session/session_runner.hip](runtime/session/session_runner.hip) - Template HIP file for the session GLTF export pipeline.
+
+  - Shared
+    - [runtime/shared/s3/download_file.sh](runtime/shared/s3/download_file.sh) - Downloads the JobPackage from S3.
+    - [runtime/shared/s3/upload_file.sh](runtime/shared/s3/upload_file.sh) - Uploads the JobResult back to S3.
 
 - Utilities (shared Python helpers used by build_util and provisioners)
   - [infra/utils/aws_utils.py](infra/utils/aws_utils.py) - AWS account/region helpers used by the CLI.
@@ -308,8 +425,14 @@ To do so, several things will need to be done:
 
   <i>These are some files which you can use to try out this sample project without any additional changes required from your end.</i>
   - [samples/JobPackageSample.zip](samples/JobPackageSample.zip) - Example JobPackage (includes a work directive and assets).
-  - [samples/send_aurora_request.py](samples/send_aurora_request.py) - Client script to enqueue a job with SQS using an S3 URI.
+  - [samples/send_aurora_request.py](samples/send_aurora_request.py) - Client script to enqueue a batch job with SQS using an S3 URI.
+  - [samples/session_tool_client.py](samples/session_tool_client.py) - Python WebSocket client for interactive session mode.
   - [samples/tf_outputs.json](samples/tf_outputs.json) - Generated after provisioning for convenience.
+
+- Web application (Session mode frontend)
+  - [webapp/config.js](webapp/config.js) - WebSocket URL and session timeout configuration.
+  - [webapp/session_tool_demo.html](webapp/session_tool_demo.html) - Interactive session UI with 3D viewer, parameter controls, and file upload.
+  - [webapp/aurora/](webapp/aurora/) - Modular JS for viewport, parameters, session management, and events.
 
 - Keys and infra assets
   - [infra/provisioning/aurora-key-pair.pem](infra/provisioning/aurora-key-pair.pem) - Example path for the EC2 keypair (ensure correct file permissions before use).
@@ -319,6 +442,7 @@ To do so, several things will need to be done:
 - If you run into an error during the building of the AMI, where packer complains about permissions on the `.pem` key (`Permission denied (publickey)`), ensure you "Disable Inheritance" on the `<pem key>` on windows, and change the permissions on Linux with `chmod 400 <pem key>`.
 - If you get any errors about resources not existing on AWS, check that the region you used in `aws configure` matches what you use when logged in on AWS console.
 - If you run into this error: `Error launching source instance: VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 0 allows for the instance bucket that the specified instance type belongs to.` please revisit the [prerequisites](#prerequisites) section at the top of this README referring to ensuring you have sufficient `service quota`.
+- If environment variables do not get recognized in your terminal, ensure you created the environment variables in the system section and not the user section.
 
 
 ## Acknowledgements

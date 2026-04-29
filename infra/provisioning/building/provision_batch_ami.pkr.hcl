@@ -21,6 +21,10 @@ variable "tooling_repo" {
   default = "github.com/Bismuth-Consultancy-BV/HoudiniOnAWS.git"
 }
 
+variable "tooling_repo_branch" {
+  default = "interactive_mode"
+}
+
 # Instance type for the EC2 instance used for building the AMI
 variable "instance_type" {
   default = "g4dn.2xlarge"
@@ -138,20 +142,11 @@ build {
   # First we install the NVIDIA driver, since this requires a reboot.
   provisioner "shell" {
 
-    expect_disconnect = true
-    pause_after       = "5m"
-
     inline = [
       # Install NVIDIA driver
       "sudo add-apt-repository ppa:graphics-drivers/ppa",
       "sudo apt update",
       "sudo apt install -y nvidia-driver-${var.nvidia_driver_version} nvidia-dkms-${var.nvidia_driver_version}",
-
-      # Trigger a reboot to complete driver install
-      "echo 'Triggering reboot via AWS CLI'",
-      "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)",
-      "REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)",
-      "aws ec2 reboot-instances --instance-ids \"$INSTANCE_ID\" --region \"$REGION\"",
     ]
   }
 
@@ -251,7 +246,7 @@ build {
       "GIT_PAT=$(echo $GIT_SECRET | jq -r .PAT)",
 
       # Clone tooling repo and set environment variable
-      "sudo git clone https://$GIT_PAT@${var.tooling_repo} --recursive /houdini_tooling",
+      "sudo git clone --branch ${var.tooling_repo_branch} https://$GIT_PAT@${var.tooling_repo} --recursive /houdini_tooling",
       "sudo chown -R ubuntu:ubuntu /houdini_tooling",
       "echo 'AURORA_TOOLING_ROOT=/houdini_tooling' | sudo tee -a /etc/environment",
 
@@ -276,20 +271,6 @@ build {
   #     "docker pull ghcr.io/epicgames/unreal-engine:dev-slim-5.6.0"
   #   ]
   # }
-
-  # Reboot to ensure all installed dependencies are clean.
-  provisioner "shell" {
-
-    expect_disconnect = true
-    pause_after       = "5m"
-
-    inline = [
-      "echo 'Triggering reboot via AWS CLI'",
-      "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)",
-      "REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)",
-      "aws ec2 reboot-instances --instance-ids \"$INSTANCE_ID\" --region \"$REGION\"",
-    ]
-  }
 
 
 }

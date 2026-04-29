@@ -47,30 +47,30 @@ def save_geometry_from_houdini(config_json_path: str) -> None:
             # Load the Houdini file
             hou.hipFile.load(hou.text.expandString(directive["hip_file"]))
 
-            for input in directive["inputs"]:
-                _node = hou.node(input["node"])
-                required = input.get("required", False)
+            for inp in directive["inputs"]:
+                _node = hou.node(inp["node"])
+                required = inp["required"]
 
                 if not _node:
                     raise ValueError(
-                        f"The specified node '{input['node']}' does not exist!"
+                        f"The specified node '{inp['node']}' does not exist!"
                     )
-                _parm = _node.parm(input["parm"])
+                _parm = _node.parm(inp["parm"])
                 if not _parm:
                     raise ValueError(
-                        f"The specified parameter '{input['parm']}' on {{input['node']}} does not exist!"
+                        f"The specified parameter '{inp['parm']}' on {inp['node']} does not exist!"
                     )
-                if input["type"] == "input_file":
+                if inp["type"] == "input_file":
                     if (
-                        not os.path.isfile(hou.text.expandString(input["value"]))
+                        not os.path.isfile(hou.text.expandString(inp["value"]))
                         and required
                     ):
                         raise ValueError(
-                            f"The specified file '{input['value']}' for parm '{input['parm']}' on node '{input['node']}' does not exist!"
+                            f"The specified file '{inp['value']}' for parm '{inp['parm']}' on node '{inp['node']}' does not exist!"
                         )
-                _parm.set(input["value"])
+                _parm.set(inp["value"])
 
-            debug_hip_path = directive.get("hip_file_debug", None)
+            debug_hip_path = directive.get("hip_file_debug")
             if debug_hip_path:
                 debug_hip_path = hou.text.expandString(debug_hip_path)
                 os.makedirs(os.path.dirname(debug_hip_path), exist_ok=True)

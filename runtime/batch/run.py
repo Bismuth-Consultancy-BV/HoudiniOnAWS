@@ -5,14 +5,14 @@ import sys
 import time
 from typing import Dict, Any
 
-AURORA_TOOLING_ROOT = os.getenv("AURORA_TOOLING_ROOT", "")
+AURORA_TOOLING_ROOT = os.getenv("AURORA_TOOLING_ROOT")
 if not AURORA_TOOLING_ROOT:
     raise ValueError("AURORA_TOOLING_ROOT environment variable is not set.")
 if AURORA_TOOLING_ROOT not in sys.path:
     sys.path.insert(0, AURORA_TOOLING_ROOT)
 
 
-from runtime.docker import utils as docker_utils
+from runtime.batch import docker_utils
 from infra.utils.aws_utils import get_aws_secrets
 from infra.utils.aws_utils import get_aws_region
 from infra.utils.constants import SIDEFX_SECRETS_NAME
@@ -36,15 +36,12 @@ def generate_houdini_content(in_args: Any, timings_dict: Dict[str, float]):
         # Getting latest SideFX secrets and mounting them to the container
         aws_region = get_aws_region()
         all_sidefx_secrets = get_aws_secrets(aws_region, SIDEFX_SECRETS_NAME)
-        json.dump(
-            all_sidefx_secrets,
-            open(
-                os.path.join(credentials_root, "houdini_credentials.json"),
-                "w",
-                encoding="utf-8",
-            ),
-            indent=4,
-        )
+        with open(
+            os.path.join(credentials_root, "houdini_credentials.json"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(all_sidefx_secrets, f, indent=4)
 
         mounted_work_directive_path = in_args.work_directive.replace(
             "$DATA_ROOT", DEFAULT_MOUNT_PATHS[DATA_ROOT]
@@ -53,7 +50,7 @@ def generate_houdini_content(in_args: Any, timings_dict: Dict[str, float]):
         # Run the automation script
         docker_utils.run_docker_compose_script_stream(
             service_name="houdini_aws:latest",
-            script_path="/mnt/tooling/runtime/runner.sh",
+            script_path="/mnt/tooling/runtime/batch/runner.sh",
             mount_paths=DEFAULT_MOUNT_PATHS,
             args=["--work_directive", mounted_work_directive_path],
             extra_docker_args=[],
@@ -82,8 +79,7 @@ if __name__ == "__main__":
         type=str,
         default=os.path.join(
             AURORA_TOOLING_ROOT,
-            "RUNTIME",
-            "IN",
+            "SHARED",
             "houdini_directive.json",
         ),
         help="The houdini_directive.json Houdini work directive to process.",
@@ -98,17 +94,14 @@ if __name__ == "__main__":
         exist_ok=True,
     )
 
-    try:
-        if args.process_hip:
-            if args.work_directive is None:
-                raise ValueError(
-                    "The --work_directive argument must be provided when --process_hip is set."
-                )
-            generate_houdini_content(args, timings)
+    if args.process_hip:
+        if args.work_directive is None:
+            raise ValueError(
+                "The --work_directive argument must be provided when --process_hip is set."
+            )
+        generate_houdini_content(args, timings)
 
-        with open(
-            os.path.join(output_directory, "timings.json"), "w", encoding="utf-8"
-        ) as f:
-            json.dump(timings, f, indent=4)
-    except Exception as e:
-        raise e
+    with open(
+        os.path.join(output_directory, "timings.json"), "w", encoding="utf-8"
+    ) as f:
+        json.dump(timings, f, indent=4)

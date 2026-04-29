@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLTF Viewer</title>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui; background: #1a1a2e; color: #eee; height: 100vh; overflow: hidden; }
+        #viewer-container { width: 100%; height: 100%; position: relative; }
+
+        #dropzone {
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            flex-direction: column; pointer-events: none; z-index: 5; color: #555; font-size: 20px;
+        }
+        #dropzone.active { background: rgba(233, 69, 96, 0.15); border: 2px dashed #e94560; pointer-events: auto; }
+        .hidden { display: none !important; }
+
+        /* Aurora Viewport overrides (toolbar already styled inside the module) */
+        .aurora-viewport { width: 100%; height: 100%; position: relative; }
+        .aurora-viewport-canvas { width: 100%; height: 100%; }
+        .aurora-viewport-canvas canvas { display: block; }
+        .aurora-viewport-toolbar {
+            position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+            display: flex; flex-direction: column; gap: 12px; z-index: 10;
+        }
+        .aurora-vp-btn {
+            width: 44px; height: 44px; border-radius: 50%;
+            background: rgba(15, 52, 96, 0.9); border: 2px solid #0f3460;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s; backdrop-filter: blur(10px);
+        }
+        .aurora-vp-btn:hover { background: rgba(233, 69, 96, 0.9); border-color: #e94560; transform: scale(1.05); }
+        .aurora-vp-btn.active { background: #e94560; border-color: #ff6b81; }
+        .aurora-vp-btn svg { width: 22px; height: 22px; fill: none; stroke: #eee; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+</head>
+<body>
+    <div id="viewer-container">
+        <div id="dropzone">Drop GLTF / GLB file here</div>
+    </div>
+
+    <script type="module">
+        import { AuroraViewport } from './aurora/index.js';
+
+        const container = document.getElementById('viewer-container');
+        const dropzone = document.getElementById('dropzone');
+        let viewport = null;
+
+        function ensureViewport() {
+            if (!viewport) {
+                viewport = new AuroraViewport(container);
+                dropzone.classList.add('hidden');
+            }
+        }
+
+        document.addEventListener('dragover', e => {
+            e.preventDefault();
+            dropzone.classList.add('active');
+        });
+
+        document.addEventListener('dragleave', e => {
+            if (!e.relatedTarget) dropzone.classList.remove('active');
+        });
+
+        document.addEventListener('drop', e => {
+            e.preventDefault();
+            dropzone.classList.remove('active');
+            const file = e.dataTransfer.files[0];
+            if (file) {
+                ensureViewport();
+                viewport.loadModelFromFile(file);
+            }
+        });
+    </script>
+</body>
+</html>

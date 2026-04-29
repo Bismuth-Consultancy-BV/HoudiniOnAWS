@@ -55,8 +55,8 @@ sudo rm -rf "$AURORA_TOOLING_ROOT"/SHARED
 echo "--------------------"
 echo "Downloading files from S3..."
 echo "--------------------"
-chmod +x "$AURORA_TOOLING_ROOT"/runtime/s3/download_file.sh
-"$AURORA_TOOLING_ROOT"/runtime/s3/download_file.sh "$S3_JOB_PACKAGE"
+chmod +x "$AURORA_TOOLING_ROOT"/runtime/shared/s3/download_file.sh
+"$AURORA_TOOLING_ROOT"/runtime/shared/s3/download_file.sh "$S3_JOB_PACKAGE"
 
 
 echo "--------------------"
@@ -69,7 +69,7 @@ ls -l "$AURORA_TOOLING_ROOT"/SHARED/*
 echo "--------------------"
 echo "Running Houdini job with directive..."
 echo "--------------------"
-python "$AURORA_TOOLING_ROOT/runtime/run.py" --process_hip --work_directive '$DATA_ROOT/houdini_directive.json'
+python "$AURORA_TOOLING_ROOT/runtime/batch/run.py" --process_hip --work_directive '$DATA_ROOT/houdini_directive.json'
 
 
 echo "--------------------"
@@ -83,7 +83,7 @@ ls -l "$AURORA_TOOLING_ROOT"/SHARED/OUT/*
 # echo "--------------------"
 # echo "Running Unreal job with directive..."
 # echo "--------------------"
-# python "$AURORA_TOOLING_ROOT/runtime/run.py" --process_unreal --work_directive '$DATA_ROOT/unreal_directive.json'
+# python "$AURORA_TOOLING_ROOT/runtime/batch/run.py" --process_unreal --work_directive '$DATA_ROOT/unreal_directive.json'
 
 
 # echo "--------------------"
@@ -96,5 +96,5 @@ echo "--------------------"
 echo "Uploading result to S3."
 echo "--------------------"
 S3_OUTPUT_FILE="s3://$S3_OUTPUT_BUCKET/$JOB_ID/JobResult.zip"
-chmod +x "$AURORA_TOOLING_ROOT"/runtime/s3/upload_file.sh
-"$AURORA_TOOLING_ROOT"/runtime/s3/upload_file.sh "$S3_OUTPUT_FILE"
+chmod +x "$AURORA_TOOLING_ROOT"/runtime/shared/s3/upload_file.sh
+"$AURORA_TOOLING_ROOT"/runtime/shared/s3/upload_file.sh "$S3_OUTPUT_FILE"

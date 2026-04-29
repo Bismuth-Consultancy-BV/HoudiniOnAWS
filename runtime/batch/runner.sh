@@ -1,4 +1,4 @@
-#!/bin/bash -u
+﻿#!/bin/bash -u
 set -e  # Exit on error
 
 # Default values
@@ -63,7 +63,7 @@ SIDEFX_CLIENT_SECRET=$(jq -r '.sidefx_secret' $CREDENTIALS_ROOT/houdini_credenti
 # Run the Houdini processing script
 echo "[HOUDINI] Starting Houdini processing script..."
 echo "--------------------"
-/opt/houdini/bin/hython "$AURORA_TOOLING_ROOT/runtime/houdini/processing.py" --work_directive "$WORK_DIRECTIVE"
+/opt/houdini/bin/hython "$AURORA_TOOLING_ROOT/runtime/batch/processing.py" --work_directive "$WORK_DIRECTIVE"
 
 # Set the completion flag
 COMPLETED_SUCCESSFULLY=1

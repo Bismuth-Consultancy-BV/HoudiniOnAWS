@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Houdini Aurora Session</title>
+    <link rel="icon" type="image/svg+xml" href="resources/bismuth_logo.svg">
+    <link rel="stylesheet" href="session_tool_demo.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    
+    <div id="landingScreen" class="landing">
+        <div class="landing-card">
+            <h2>Houdini Aurora Session</h2>
+            <p class="landing-subtitle">Use Houdini Digital Assets interactively in the cloud</p>
+            <button id="initializeBtn" class="btn btn-primary">Start Session</button>
+            <div id="uploadError" class="upload-error"></div>
+        </div>
+    </div>
+
+    <!-- Hidden file input for HDA loading via menu -->
+    <input type="file" id="hdaFileInput" accept=".hda" style="display: none;">
+
+    <div id="appContainer" class="container hidden">
+        <!-- Menu Bar -->
+        <div class="menu-bar" id="menuBar">
+            <div class="menu-item">
+                <button class="menu-button" onclick="toggleMenu(this)">Session</button>
+                <div class="menu-dropdown">
+                    <button class="menu-option" id="menuLoadHDABtn" onclick="menuLoadHDA()">
+                        <span class="menu-icon">📂</span> Load HDA
+                    </button>
+                    <div class="menu-divider"></div>
+                    <button class="menu-option menu-option-danger" id="menuTerminateBtn" onclick="menuTerminateSession()">
+                        <span class="menu-icon">⏹</span> Terminate
+                    </button>
+                </div>
+            </div>
+            <div class="menu-item">
+                <button class="menu-button" onclick="toggleMenu(this)">Scene</button>
+                <div class="menu-dropdown">
+                    <button class="menu-option" id="menuExportBtn" onclick="menuExportScene()">
+                        <span class="menu-icon">💾</span> Export
+                    </button>
+                </div>
+            </div>
+            <div class="menu-spacer"></div>
+            <div class="menu-hda-name" id="menuHdaName"></div>
+            <div class="menu-status" id="menuStatus">Disconnected</div>
+        </div>
+        <div class="main-content">
+            <!-- Main Viewer -->
+            <div class="viewer">
+                <div id="viewerMount" class="geometry-viewer"></div>
+                <img src="resources/bismuth_logo.svg" alt="Bismuth" class="bismuth-logo">
+                <div class="geometry-info" id="geometryInfo" style="display: none;">
+                    <div><strong>Geometry Info</strong></div>
+                    <div>Points: <span id="pointCount">-</span></div>
+                    <div>Primitives: <span id="primCount">-</span></div>
+                </div>
+                
+                <!-- Log Console -->
+                <div id="logConsole" class="log-console collapsed">
+                    <div class="log-console-header" onclick="toggleLogConsole()">
+                        <span class="log-console-title">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="4 17 10 11 4 5"></polyline>
+                                <line x1="12" y1="19" x2="20" y2="19"></line>
+                            </svg>
+                            Houdini Console
+                        </span>
+                        <span class="log-console-toggle">▲</span>
+                    </div>
+                    <div class="log-console-body">
+                        <div id="logMessages" class="log-messages">
+                            <!-- Log messages will be added here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar Controls -->
+            <div class="sidebar">
+
+                <div class="section" id="loadingSection">
+                    <div class="loading-spinner-container">
+                        <div class="spinner"></div>
+                        <p class="loading-text" id="loadingText">Starting session...</p>
+                    </div>
+                </div>
+                <div class="section" id="emptyState" style="display: none;">
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#a0aec0" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                        <p>No HDA loaded</p>
+                        <small>Use <strong>Session → Load HDA</strong> to get started</small>
+                    </div>
+                </div>
+                <div class="section" id="parametersSection" style="display: none;">
+                    <h3>Parameters</h3>
+                    <div id="parametersContainer">
+                        <!-- Parameters will be generated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Geometry Loading Indicator -->
+        <div id="geometryLoader" class="geometry-loader" style="display: none;">
+            <div class="geometry-loader-spinner"></div>
+            <div class="geometry-loader-text">Houdini is cooking...</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { CONFIG } from './config.js';
+        import { AuroraViewport, AuroraParameters, AuroraSession } from './aurora/index.js';
+
+        let session = null;
+        let selectedFile = null;
+        let currentGeometryUrl = null;
+        let pendingSave = false;
+        let pendingNewHDA = false;
+        let viewport = null;
+        let paramUI = null;
+        
+        // DOM elements
+        const landingScreen = document.getElementById('landingScreen');
+        const appContainer = document.getElementById('appContainer');
+        const geometryLoader = document.getElementById('geometryLoader');
+        const initializeBtn = document.getElementById('initializeBtn');
+        const hdaFileInput = document.getElementById('hdaFileInput');
+        const uploadError = document.getElementById('uploadError');
+        const viewerMount = document.getElementById('viewerMount');
+        const geometryInfo = document.getElementById('geometryInfo');
+        const pointCount = document.getElementById('pointCount');
+        const primCount = document.getElementById('primCount');
+        const loadingText = document.getElementById('loadingText');
+        const menuStatus = document.getElementById('menuStatus');
+        const menuHdaName = document.getElementById('menuHdaName');
+        const loadingSection = document.getElementById('loadingSection');
+        const emptyState = document.getElementById('emptyState');
+        const parametersSection = document.getElementById('parametersSection');
+        const parametersContainer = document.getElementById('parametersContainer');
+
+        // ===== UI state helpers =====
+
+        function initializeUI() {
+            parametersSection.style.display = 'none';
+            loadingSection.style.display = 'none';
+            emptyState.style.display = 'none';
+        }
+
+        function showLanding() {
+            landingScreen.classList.remove('hidden');
+            appContainer.classList.add('hidden');
+            uploadError.textContent = '';
+            initializeBtn.disabled = false;
+            menuStatus.textContent = 'Disconnected';
+            menuHdaName.textContent = '';
+        }
+
+        function showApp() {
+            landingScreen.classList.add('hidden');
+            appContainer.classList.remove('hidden');
+            loadingSection.style.display = 'block';
+            parametersSection.style.display = 'none';
+            emptyState.style.display = 'none';
+            document.getElementById('menuLoadHDABtn').disabled = true;
+            document.getElementById('menuTerminateBtn').disabled = true;
+            document.getElementById('menuExportBtn').disabled = true;
+
+            if (!viewport) {
+                try {
+                    viewport = new AuroraViewport(viewerMount);
+                } catch (error) {
+                    console.error('Failed to initialize 3D viewport:', error);
+                    teardown();
+                    showLanding();
+                    uploadError.textContent = 'WebGL is unavailable in this browser/environment. Enable hardware acceleration or try a different browser/device.';
+                    return false;
+                }
+            }
+
+            if (!paramUI) {
+                paramUI = new AuroraParameters(parametersContainer);
+                paramUI.on('change', ({ paramPath, value, numComponents }) => {
+                    showGeometryLoader();
+                    session.updateParameter(paramPath, value, numComponents);
+                });
+            }
+
+            return true;
+        }
+
+        function showSessionReady() {
+            loadingSection.style.display = 'none';
+            parametersSection.style.display = 'none';
+            emptyState.style.display = 'block';
+            menuStatus.textContent = 'Session Active';
+            document.getElementById('menuLoadHDABtn').disabled = false;
+            document.getElementById('menuTerminateBtn').disabled = false;
+            document.getElementById('menuExportBtn').disabled = true;
+        }
+
+        function showLoadingHDA() {
+            loadingSection.style.display = 'block';
+            parametersSection.style.display = 'none';
+            emptyState.style.display = 'none';
+            menuHdaName.textContent = '';
+        }
+
+        function showParameters() {
+            loadingSection.style.display = 'none';
+            parametersSection.style.display = 'block';
+            emptyState.style.display = 'none';
+        }
+
+        function updateLoadingMessage(msg) { loadingText.textContent = msg; }
+        function showGeometryLoader() { if (geometryLoader) geometryLoader.style.display = 'flex'; }
+        function hideGeometryLoader() { if (geometryLoader) geometryLoader.style.display = 'none'; }
+
+        // ===== Log console =====
+
+        function toggleLogConsole() {
+            const lc = document.getElementById('logConsole');
+            const tog = lc.querySelector('.log-console-toggle');
+            if (lc.classList.contains('collapsed')) { lc.classList.remove('collapsed'); tog.textContent = '▼'; }
+            else { lc.classList.add('collapsed'); tog.textContent = '▲'; }
+        }
+
+        function addLogMessage(level, message, context) {
+            const logMessages = document.getElementById('logMessages');
+            if (!logMessages) return;
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${level}`;
+            const ts = new Date().toLocaleTimeString();
+            const ctx = context ? `[${context}] ` : '';
+            entry.innerHTML = `<span class="log-time">${ts}</span><span class="log-level">${level.toUpperCase()}</span><span class="log-message">${ctx}${message}</span>`;
+            logMessages.appendChild(entry);
+            logMessages.scrollTop = logMessages.scrollHeight;
+            while (logMessages.children.length > 200) logMessages.removeChild(logMessages.firstChild);
+        }
+
+        // ===== Menu bar =====
+
+        function toggleMenu(btn) {
+            const dd = btn.nextElementSibling;
+            const wasOpen = dd.classList.contains('open');
+            document.querySelectorAll('.menu-dropdown').forEach(d => d.classList.remove('open'));
+            if (!wasOpen) dd.classList.add('open');
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.menu-item'))
+                document.querySelectorAll('.menu-dropdown').forEach(d => d.classList.remove('open'));
+        });
+
+        function menuLoadHDA() {
+            document.querySelectorAll('.menu-dropdown').forEach(d => d.classList.remove('open'));
+            hdaFileInput.click();
+        }
+
+        async function menuTerminateSession() {
+            document.querySelectorAll('.menu-dropdown').forEach(d => d.classList.remove('open'));
+            if (!confirm('Are you sure you want to terminate this session?')) return;
+            menuStatus.textContent = 'Terminating...';
+            session.terminate();
+            await new Promise(r => setTimeout(r, 1000));
+            teardown();
+            showLanding();
+        }
+
+        function menuExportScene() {
+            document.querySelectorAll('.menu-dropdown').forEach(d => d.classList.remove('open'));
+            if (!currentGeometryUrl) { alert('No geometry available to export.'); return; }
+            addLogMessage('info', 'Requesting fresh geometry download URL...', 'Client');
+            session.requestGeometry({ purpose: 'save' });
+            pendingSave = true;
+        }
+
+        // ===== Geometry helpers =====
+
+        function loadGeometry(url) {
+            if (!viewport) { console.warn('Viewport not initialised'); return; }
+            const resetView = pendingNewHDA;
+            pendingNewHDA = false;
+            viewport.loadModel(url, { resetView })
+                .then(() => console.log('Geometry loaded'))
+                .catch(err => console.error('Error loading geometry:', err));
+        }
+
+        function downloadGeometry(url) {
+            (async () => {
+                try {
+                    addLogMessage('info', 'Downloading geometry...', 'Client');
+                    const resp = await fetch(url);
+                    if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+                    const blob = await resp.blob();
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `geometry_${Date.now()}.glb`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
+                    addLogMessage('info', 'Geometry saved to disk', 'Client');
+                } catch (err) {
+                    console.error('Error saving geometry:', err);
+                    alert('Failed to save geometry: ' + err.message);
+                }
+            })();
+        }
+
+        // ===== Teardown =====
+
+        function teardown() {
+            if (session) { session.dispose(); session = null; }
+            if (viewport) { viewport.dispose(); viewport = null; }
+            if (paramUI) { paramUI.dispose(); paramUI = null; }
+            selectedFile = null;
+            currentGeometryUrl = null;
+        }
+
+        // ===== HDA file input =====
+
+        hdaFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (!file.name.endsWith('.hda')) {
+                alert('Invalid file type. Please use a .hda (Houdini Digital Asset) file.');
+                hdaFileInput.value = '';
+                return;
+            }
+            selectedFile = file;
+            showLoadingHDA();
+            updateLoadingMessage('Uploading HDA file to S3...');
+            addLogMessage('info', `Loading HDA: ${file.name}`, 'Client');
+            const ok = await session.uploadHDA(file);
+            if (!ok) {
+                alert('Failed to upload HDA file. Please try again.');
+                showSessionReady();
+            } else {
+                updateLoadingMessage('Extracting parameters from HDA...');
+            }
+            hdaFileInput.value = '';
+        });
+
+        // ===== Start Session =====
+
+        initializeBtn.addEventListener('click', async () => {
+            initializeBtn.disabled = true;
+            uploadError.textContent = '';
+            if (!showApp()) {
+                initializeBtn.disabled = false;
+                return;
+            }
+            updateLoadingMessage('Connecting to session...');
+            menuStatus.textContent = 'Connecting...';
+
+            try {
+                session = new AuroraSession({ url: CONFIG.websocket_url });
+                wireSessionEvents(session);
+
+                await session.connect();
+                addLogMessage('system', 'WebSocket connected', 'Client');
+
+                session.startSession({
+                    idle_timeout_minutes: CONFIG.idle_timeout_minutes || 15,
+                    idle_warning_minutes: CONFIG.idle_warning_minutes || 2
+                });
+
+                updateLoadingMessage('Starting EC2 instance...');
+                menuStatus.textContent = 'Starting...';
+            } catch (error) {
+                console.error('Failed to start session:', error);
+                uploadError.textContent = 'Failed to connect. Please try again.';
+                showLanding();
+            }
+        });
+
+        // ===== Wire AuroraSession events to the UI =====
+
+        function wireSessionEvents(s) {
+            s.on('status', (text) => {
+                menuStatus.textContent = text;
+                updateLoadingMessage(text);
+            });
+
+            s.on('session_ready', () => {
+                addLogMessage('system', 'Houdini session ready', 'Client');
+                showSessionReady();
+            });
+
+            s.on('parameters_ready', (data) => {
+                addLogMessage('info', `Parameters extracted from HDA (${Object.keys(data.parameters.parameters || {}).length} params, ${data.node_count} nodes)`, 'Client');
+                pendingNewHDA = true;
+
+                currentGeometryUrl = null;
+                document.getElementById('menuExportBtn').disabled = true;
+                geometryInfo.style.display = 'none';
+                pointCount.textContent = '-';
+                primCount.textContent = '-';
+                if (viewport) viewport.clearModel();
+
+                paramUI.load(data.parameters);
+                if (paramUI.toolLabel) {
+                    menuHdaName.textContent = paramUI.toolLabel;
+                    menuHdaName.title = paramUI.toolDescription;
+                }
+                showParameters();
+            });
+
+            s.on('geometry_ready', (geo) => {
+                hideGeometryLoader();
+
+                if (geo.error) {
+                    addLogMessage('error', `Geometry export failed: ${geo.error}`, 'Houdini');
+                    if (pendingSave) pendingSave = false;
+                    alert('Geometry export error: ' + geo.error);
+                    return;
+                }
+
+                if (geo.url) {
+                    currentGeometryUrl = geo.url;
+                    document.getElementById('menuExportBtn').disabled = false;
+                    if (pendingSave) { pendingSave = false; downloadGeometry(geo.url); }
+                    else { loadGeometry(geo.url); }
+                    addLogMessage('info', `Geometry ready: ${geo.point_count} points, ${geo.primitive_count} primitives`, 'Houdini');
+                }
+
+                geometryInfo.style.display = 'block';
+                pointCount.textContent = geo.point_count || '-';
+                primCount.textContent = geo.primitive_count || '-';
+            });
+
+            s.on('idle_warning', (data) => {
+                const minutes = Math.ceil(data.seconds_remaining / 60);
+                menuStatus.textContent = `⚠️ Idle - ${minutes} min left`;
+                alert(data.message + ' Interact with parameters to keep session alive.');
+            });
+
+            s.on('idle_timeout', (data) => {
+                menuStatus.textContent = 'Timed Out';
+                alert(data.message);
+                setTimeout(() => { teardown(); showLanding(); }, 2000);
+            });
+
+            s.on('log', ({ level, message, context }) => addLogMessage(level, message, context));
+
+            s.on('error', (err) => {
+                hideGeometryLoader();
+                if (!appContainer.classList.contains('hidden')) {
+                    alert('Error: ' + err);
+                    showSessionReady();
+                } else {
+                    uploadError.textContent = err;
+                    initializeBtn.disabled = false;
+                }
+            });
+        }
+
+        // Expose functions used by inline onclick handlers
+        window.toggleMenu = toggleMenu;
+        window.menuLoadHDA = menuLoadHDA;
+        window.menuTerminateSession = menuTerminateSession;
+        window.menuExportScene = menuExportScene;
+        window.toggleLogConsole = toggleLogConsole;
+
+        // Boot
+        window.addEventListener('load', () => { initializeUI(); showLanding(); });
+    </script>
+</body>
+</html>
