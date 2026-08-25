@@ -74,21 +74,13 @@ export CLIENT_SECRET=$(echo "$SIDEFX_API_SECRET" | jq -r .sidefx_secret)
 # ("You are not logged into the license server. [Error L01]") and falls back
 # to prompting for an email address, which never terminates on a headless
 # instance. So configure the ini and do not call `sesictrl login` at all.
-LICENSE_SERVER="https://www.sidefx.com/license/sesinetd"
-
-# hserver reads /usr/lib/sesi/hserver/hserver.ini when run as a service and
-# $HOME/.local/share/sidefx/hserver.ini otherwise. We run it as ubuntu, so only
-# the per-user file applies. Writing the service path as root left a 0600
-# root-owned file that hserver could not read, and it reported
-# "Invalid options given" on every boot.
-HSERVER_INI="$HOME/.local/share/sidefx/hserver.ini"
-
-log_step "Writing hserver API key configuration..."
-mkdir -p "$(dirname "$HSERVER_INI")"
-printf 'APIKey=%s %s %s\n' "$LICENSE_SERVER" "$CLIENT_ID" "$CLIENT_SECRET" > "$HSERVER_INI"
-chmod 600 "$HSERVER_INI"
-log_step "hserver.ini written ($HSERVER_INI)"
-
+# Pass the API keys to hserver on the command line and write no hserver.ini.
+#
+# An APIKey line in hserver.ini needs a servername, and the sesinetd URL that
+# used to be passed as --host is not the right value for it: with a readable
+# ini in place hserver takes the credentials but finds no licenses, and hython
+# exits with "No licenses could be found". The credentials work when supplied
+# as arguments, so supply them that way and leave the options file alone.
 log_step "Starting Houdini license server..."
 /opt/houdini/bin/hserver -q
 /opt/houdini/bin/hserver --clientid "$CLIENT_ID" --clientsecret "$CLIENT_SECRET"
@@ -101,7 +93,7 @@ log_step "Houdini licensing configured (hserver started with API keys)"
 # until later in this script, so they cannot gate this. Both calls are read-only and take their credentials as arguments
 # so neither can fall back to the interactive prompt; stdin is closed and
 # output capped so a command that prompts anyway cannot flood the log.
-if [ "${AURORA_LICENSE_DEBUG:-0}" = "1" ]; then
+if [ "${AURORA_LICENSE_DEBUG:-1}" = "1" ]; then
     log_step "--- hserver status ---"
     timeout 30 /opt/houdini/bin/hserver -l < /dev/null 2>&1 | head -c 4000 || true
     log_step "--- available licenses ---"
