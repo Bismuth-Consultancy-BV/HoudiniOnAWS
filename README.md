@@ -91,30 +91,30 @@ To test the provided sample (or your own data!) you can do the following:
 2. Enter conda env created earlier.
 3. Run the already built image with the following command:
 ```bash
-python runtime/batch/run.py --process_hip --work_directive "$DATA_ROOT/houdini_directive.json"
+python runtime/batch/run.py --process_hip --work_directive '$DATA_ROOT/houdini_directive.json'
 ```
 </details>
 
 ### Defining a JobPackage
-In order for Houdini and the Aurora sample to know what and how to process a `.hip` file, you need to create what is called a `work_directive.json` as part of a job package. A sample of such a work directive (and job package) can be found inside `$AURORA_TOOLING_ROOT/JobPackageSample.zip`. In this section we will look at how you can create your own.
+In order for Houdini and the Aurora sample to know what and how to process a `.hip` file, you need to create what is called a work directive (`houdini_directive.json`) as part of a job package. A sample of such a work directive (and job package) can be found inside `$AURORA_TOOLING_ROOT/samples/JobPackageSample.zip`. In this section we will look at how you can create your own.
 
 > [!IMPORTANT]
-> All filepaths used in the `work_directive.json` should alway be relative paths. Paths used for files within the JobPackage zip should always use `$DATA_ROOT` to specify the root of the package.
+> All filepaths used in the `houdini_directive.json` should alway be relative paths. Paths used for files within the JobPackage zip should always use `$DATA_ROOT` to specify the root of the package.
 
 <details>
 <summary>Instructions</summary>
 
 In order to have a JobPackage.zip be valid, you need at least 2 things:
-1. `work_directive.json`
+1. `houdini_directive.json`
     - This will contain all the "instructions" that Houdini needs to correctly process your file.
 2. Houdini file (`.hip`)
     - This is the houdini file used for processing. You are able to include multiple `.hip` files.
 
-#### Understanding the work_directive.json
+#### Understanding the houdini_directive.json
 The work directive is a simple JSON, which contains a list with processing entries. As you can see, the JSON root element is a list (seen by the `[ ]`). This list contains dictionary entries which have all the relevant configs used by the [houdini processor](runtime/batch/processing.py). The processor will process the entries based on the index they have in this list; This can be used to for example cook certain hip files before others. The most important elements are as follows:
 - `enabled` - Boolean indicating if this entry should be considered for processing.
 - `hip_file` - This is the filepath to the `.hip` that should be processed. `$DATA_ROOT` should always be used to indicate the root of the `.zip` file.
-- `hip_file_debug` - (optional) This is an optional filepath you can specify (also relative to `$DATA_ROOT`), where a copy of the input `.hip` will be saved with all of its parameters set based on the `work_directive.json`. This is primarily useful for debugging. This field is <i>optional</i>.
+- `hip_file_debug` - (optional) This is an optional filepath you can specify (also relative to `$DATA_ROOT`), where a copy of the input `.hip` will be saved with all of its parameters set based on the `houdini_directive.json`. This is primarily useful for debugging. This field is <i>optional</i>.
 - `inputs` - This is a list (also indicated by `[ ]`), containing all of the parameters that need to be set in the `.hip` file. 
     - `node` - The full absolute path to the node that needs to be configured.
     - `parm` - The parameter name that needs to be configured on the relevant node.
@@ -122,7 +122,8 @@ The work directive is a simple JSON, which contains a list with processing entri
     - `type` - The type of value that is being set. This is mainly to detect invalid configurations and help debug potential issues.
         - `literal` - A literal value you want to set.
         - `input_file` - Specified that the value which is set is an input file. This will run a check to make sure the specified input file is actually present / available.
-        - `required` (optional) - Field indicating whether or not this input file is required for the cook to succeed. This is useful when you wish to reuse the same `work_directive.json` with multiple input datasets.
+        - `output_file` - Specifies that the value which is set is a file the cook will write. No check is run on it.
+    - `required` (optional) - Field indicating whether or not this input file is required for the cook to succeed. Only meaningful alongside `type: input_file`, and defaults to `false` when left out. This is useful when you wish to reuse the same `houdini_directive.json` with multiple input datasets.
 - `execute` - This is a list (also indicated by `[ ]`), pointing to buttons that should be pressed to run the cook of the `.hip` file. For example the "Save to Disk" button on a Geometry ROP. You can add as many as you want. Notice that the path is pointing to the actual button parameter itself. (`<node_path>/<parameter_name>`)
 ```json
 [
@@ -230,7 +231,7 @@ Once the job has been kicked off, the EC2 instance will start up and processing 
 This sample is currently limited to the use of Houdini on AWS, but can easily be extended to also use Unreal Engine. For example to ingest Houdini generated content through Houdini Engine, and use such content to for example automatically generate a map.
 
 To do so, several things will need to be done:
-1. Uncomment/extend the lines in [infra/building/provision_batch_ami.pkr.hcl](infra/building/provision_batch_ami.pkr.hcl) that are responsible for authenticating with GHCR and pulling the image with a pre-built UnrealEngine binary. For more information see the [documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/quick-start-guide-for-using-container-images-in-unreal-engine) Epic provides.
+1. Uncomment/extend the lines in [infra/provisioning/building/provision_batch_ami.pkr.hcl](infra/provisioning/building/provision_batch_ami.pkr.hcl) that are responsible for authenticating with GHCR and pulling the image with a pre-built UnrealEngine binary. For more information see the [documentation](https://dev.epicgames.com/documentation/en-us/unreal-engine/quick-start-guide-for-using-container-images-in-unreal-engine) Epic provides.
     - When doing this, make sure you also change the allocated maximum disk space on the AMI, since UE uses quite a lot more disk space then Houdini.
     - You will also need to add a new set of credentials to the Secrets Manager specific to Unreal, just like the ones described above.
 2. Uncomment/extend the lines in [runtime/batch/entrypoint.sh](runtime/batch/entrypoint.sh) that are responsible for calling upon your scripts that call Unreal inside the container.
@@ -239,7 +240,7 @@ To do so, several things will need to be done:
 ### Session Mode on AWS
 Session mode allows users to manipulate Houdini Digital Assets (HDAs) in real-time through a web browser. Instead of submitting a job to a queue, a persistent EC2 instance is launched with a WebSocket connection for bidirectional communication. Parameter changes are sent to Houdini, geometry is exported as GLTF, and the result is displayed in a 3D viewer in the browser.
 
-#### 1. Building the Session AMI
+#### 1. Building the Session AMI and Infrastructure
 <details>
 <summary>Instructions</summary>
 
@@ -248,13 +249,15 @@ To build the session AMI, run the following from the repository root:
 python infra/build_util.py --build_ami --provision_service_aws --keypair $AURORA_TOOLING_ROOT/infra/provisioning/aurora-key-pair.pem
 ```
 This builds an AMI with Houdini, Vulkan drivers, and the session runtime pre-installed. It is separate from the batch AMI.
+
+Note that `--provision_service_aws` does double duty here: it tells `--build_ami` to build the *session* AMI rather than the batch one, and it provisions the session infrastructure once that AMI exists. A single run of the command above therefore leaves you with both.
 </details>
 
-#### 2. Provisioning Session Infrastructure
+#### 2. Re-provisioning Session Infrastructure
 <details>
 <summary>Instructions</summary>
 
-To provision the session infrastructure, run:
+The command in step 1 already provisioned the infrastructure. To re-provision it later without rebuilding the AMI — after changing the Terraform or the Lambda handlers, for example — run:
 ```bash
 python infra/build_util.py --provision_service_aws
 ```
@@ -292,14 +295,39 @@ python -m http.server 8000
 ```
 
 The workflow is:
-1. Select a `.hda` file using the file browser.
-2. Click "Initialize Session" — the file is uploaded to S3 and an EC2 instance is launched (takes 1-2 minutes).
-3. Parameters from the HDA are automatically displayed as interactive controls.
-4. Adjust parameters — geometry updates in the 3D viewer each time you release a slider.
+1. Click "Start Session" — an EC2 instance is launched (takes 1-2 minutes). The menu bar reports progress; no asset is involved yet.
+2. Use `Session > Load HDA` to pick a digital asset. `.hda`, `.hdalc`, `.hdanc`, `.otl`, `.otllc` and `.otlnc` are all accepted. The file is uploaded to S3 and installed into the running session.
+3. Parameters from the HDA are automatically displayed as interactive controls, and the asset's first output is cooked and shown in the viewer.
+4. Adjust parameters — geometry updates in the 3D viewer. By default every change cooks immediately; see [Controlling when the session cooks](#controlling-when-the-session-cooks) to change that.
 5. Use `Scene > Export` to save the result as a `.glb` file. See [Understanding HDA outputs](#understanding-hda-outputs) if your asset has more than one output.
-6. Click "Terminate Session" when done to clean up the EC2 instance.
+6. Use `Session > Terminate` when done to clean up the EC2 instance.
 
-Sessions auto-terminate after the configured idle period (default: 15 minutes) to save costs.
+You can load a different asset at any time with `Session > Load HDA` — the session stays up and swaps the asset, which is much quicker than starting over.
+
+> [!WARNING]
+> The instance is terminated when the browser disconnects (closing the tab, or losing the connection), or when you terminate the session from the menu. **There is no idle timeout yet** — `idle_timeout_minutes` in `webapp/config.js` is passed through to the instance but nothing acts on it, so a session left open in a browser tab keeps running, and keeps costing money.
+</details>
+
+#### Controlling when the session cooks
+<details>
+<summary>Instructions</summary>
+
+Every parameter change normally triggers a cook on the instance and a fresh GLB in the viewer. On a heavy asset that is more round trips than you want, so the header of the **Houdini Console** panel (bottom-left of the viewer) carries two controls:
+
+- **Cook** — untick to stop cooking altogether. Parameter changes are still sent to the session and applied, so nothing is lost; the viewer simply stops updating. Ticking it again cooks once and brings the viewer back up to date. Useful for setting up several parameters before paying for a single cook.
+- **Auto / On Mouse Up** — `Auto` (the default) cooks continuously while you drag a slider. `On Mouse Up` waits until you release it, which is the better choice when a single cook takes more than a moment.
+
+While a cook is running, an indicator appears in the bottom-left of the viewer. Changes made during a cook are coalesced: the session finishes what it is doing, then picks up the newest value.
+</details>
+
+#### Reading the session panels
+<details>
+<summary>Instructions</summary>
+
+- **Houdini Console** (bottom-left of the viewer, click the header to expand) — everything Houdini reports: node errors, warnings and messages from your asset, plus client-side events like uploads and exports. This is the first place to look when an asset does not behave as expected.
+- **Statistics** (menu bar) — a per-stage breakdown of the last geometry update: how long Houdini cooked, how long the GLB took to write and upload, and how long the browser spent downloading, parsing and drawing it. Handy for working out whether an asset feels slow because of the cook or because of the payload size.
+- **Houdini version** (menu bar) — the Houdini build running on the instance. If a loaded asset was authored in a newer build, Houdini reports definition and parameter mismatches while installing it; the session collects those and shows a warning above the parameters. The asset still loads, but may not cook as its author intended.
+- **File parameters** — an asset's file parameters get a file picker. The chosen file is uploaded to S3 and downloaded onto the instance before the parameter is set, so the asset can read it as a normal local path.
 </details>
 
 #### Understanding HDA outputs
@@ -343,18 +371,22 @@ Output names in the dialog come from the output labels set in the asset's *Type 
 <details>
 <summary>Instructions</summary>
 
-The Python client can be used for programmatic access or debugging. It reads the WebSocket URL from `samples/tf_outputs.json` automatically.
+The Python client can be used for programmatic access or debugging. It speaks the same protocol as the web client, and reads the WebSocket URL from `samples/tf_outputs.json` automatically.
 
 Interactive mode:
 ```bash
-python samples/session_tool_client.py --command interactive
+python samples/session_tool_client.py --command interactive --hda-file MyTool.hda
 
 # Commands available in the interactive shell:
+>>> load OtherTool.hda
+>>> params
 >>> param /obj/CONTAINER/user_hda/size 5.0
+>>> cook
 >>> status
 >>> geometry
 >>> quit
 ```
+`--hda-file` is optional — leave it off to start an empty session and load an asset later with the `load` command.
 
 Programmatic usage:
 ```python
@@ -365,14 +397,28 @@ async def main():
     client = AuroraSessionClient(
         websocket_url="wss://your-api-id.execute-api.eu-north-1.amazonaws.com/production"
     )
-    await client.connect(hda_file="MyTool.hda")
+    await client.connect()
+
+    # The receive loop drains the socket and resolves the waits below.
+    asyncio.create_task(client.receive_messages())
+
     await client.start_session()
+    await client.wait_until_ready()      # instance boot + Houdini cold start
+
+    await client.load_hda("MyTool.hda")  # uploads to S3, installs, returns the schema
+    print(client.parameters["parameters"].keys())
+
     await client.update_parameter("/obj/CONTAINER/user_hda/size", 5.0)
+    await asyncio.sleep(5)               # give the cook a moment to come back
     geometry_url = client.get_last_geometry_url()
+
     await client.terminate()
 
 asyncio.run(main())
 ```
+
+> [!IMPORTANT]
+> `receive_messages()` has to be running for `wait_until_ready()`, `load_hda()` and geometry URLs to work — it is the only thing reading the socket. Every asset is instantiated at `/obj/CONTAINER/user_hda`, so its parameter paths all start with that prefix; the exact names come from `client.parameters` after `load_hda()`.
 </details>
 
 > [!TIP]
@@ -470,7 +516,13 @@ You will also need to log into the [AWS console](https://aws.amazon.com/console/
 - Web application (Session mode frontend)
   - [webapp/config.js](webapp/config.js) - WebSocket URL and session timeout configuration.
   - [webapp/index.html](webapp/index.html) - Interactive session UI with 3D viewer, parameter controls, and file upload. Markup and bootstrap only; all behaviour lives in [webapp/aurora/app.js](webapp/aurora/app.js).
-  - [webapp/aurora/](webapp/aurora/) - Modular JS for viewport, parameters, session management, and events.
+  - [webapp/session_tool_demo.css](webapp/session_tool_demo.css) - Styling for the session UI.
+  - [webapp/aurora/app.js](webapp/aurora/app.js) - Application orchestrator: session lifecycle, menus, cook control, log console, export dialog, and the geometry flow.
+  - [webapp/aurora/session.js](webapp/aurora/session.js) - WebSocket client: connection, commands, and S3 uploads via presigned URLs.
+  - [webapp/aurora/viewport.js](webapp/aurora/viewport.js) - Three.js viewer that loads the exported GLB.
+  - [webapp/aurora/parameters.js](webapp/aurora/parameters.js) - Builds HTML controls from an HDA's parameter schema.
+  - [webapp/aurora/events.js](webapp/aurora/events.js) - Minimal event emitter the modules above inherit from.
+  - [webapp/gltf_viewer.html](webapp/gltf_viewer.html) - Standalone GLB viewer, useful for inspecting an exported file on its own.
 
 - Keys and infra assets
   - [infra/provisioning/aurora-key-pair.pem](infra/provisioning/aurora-key-pair.pem) - Example path for the EC2 keypair (ensure correct file permissions before use).

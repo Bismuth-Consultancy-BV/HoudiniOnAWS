@@ -49,7 +49,9 @@ def save_geometry_from_houdini(config_json_path: str) -> None:
 
             for inp in directive["inputs"]:
                 _node = hou.node(inp["node"])
-                required = inp["required"]
+                # Optional field - only input_file entries use it, and the
+                # sample job package leaves it off everywhere else.
+                required = inp.get("required", False)
 
                 if not _node:
                     raise ValueError(

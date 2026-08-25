@@ -7,12 +7,15 @@ export const CONFIG = {
     websocket_url: "wss://kbv73t4jhj.execute-api.eu-north-1.amazonaws.com/production",
     
     // Idle session timeout in minutes (default: 15)
-    // Session will auto-terminate after this period of inactivity
-    // Warning appears before timeout (see idle_warning_minutes below)
+    //
+    // NOTE: not enforced yet. The value is passed to the session instance,
+    // but nothing there tracks activity, so no session is terminated for
+    // being idle. A session ends when the browser disconnects (closing the
+    // tab, or losing the connection) or when you terminate it from the menu.
     idle_timeout_minutes: 15,
-    
+
     // Warning time before idle timeout in minutes (default: 2)
-    // Alert will appear this many minutes before session terminates
+    // Unused until the idle timeout above is implemented.
     idle_warning_minutes: 2,
     
     // Optional: Add other configuration as needed
