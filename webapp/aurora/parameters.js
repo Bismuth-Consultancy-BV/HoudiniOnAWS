@@ -222,9 +222,14 @@ export class AuroraParameters extends EventEmitter {
     /*  Individual control builders                                        */
     /* ================================================================== */
 
-    /** @private */
-    _emitChange(paramPath, value, numComponents) {
-        this._emit('change', { paramPath, value, numComponents });
+    /**
+     * @private
+     * @param {boolean} [live=false] — true while a control is still being
+     *        dragged. The host decides whether to act on these (Auto) or wait
+     *        for the commit event on release (On Mouse Up).
+     */
+    _emitChange(paramPath, value, numComponents, live = false) {
+        this._emit('change', { paramPath, value, numComponents, live });
     }
 
     /** @private */
@@ -259,6 +264,8 @@ export class AuroraParameters extends EventEmitter {
 
         slider.addEventListener('input', () => {
             valueSpan.textContent = parseFloat(slider.value).toFixed(decimals);
+            this._emitChange(
+                paramPath, parseFloat(slider.value), paramDef.num_components || 1, true);
         });
 
         slider.addEventListener('change', () => {
@@ -413,6 +420,11 @@ export class AuroraParameters extends EventEmitter {
     _createColor(paramPath, paramDef) {
         const input = document.createElement('input');
         input.type = 'color';
+        const toRGB = (hex) => [
+            parseInt(hex.slice(1, 3), 16) / 255,
+            parseInt(hex.slice(3, 5), 16) / 255,
+            parseInt(hex.slice(5, 7), 16) / 255
+        ];
 
         const rgb = paramDef.default || [1, 1, 1];
         input.value = '#' + rgb.map(x => {
@@ -420,14 +432,14 @@ export class AuroraParameters extends EventEmitter {
             return h.length === 1 ? '0' + h : h;
         }).join('');
 
+        // Colour pickers stream 'input' while the user drags in the picker.
+        input.addEventListener('input', () => {
+            this._emitChange(
+                paramPath, toRGB(input.value), paramDef.num_components || 3, true);
+        });
+
         input.addEventListener('change', () => {
-            const hex = input.value;
-            const rgbOut = [
-                parseInt(hex.slice(1, 3), 16) / 255,
-                parseInt(hex.slice(3, 5), 16) / 255,
-                parseInt(hex.slice(5, 7), 16) / 255
-            ];
-            this._emitChange(paramPath, rgbOut, paramDef.num_components || 3);
+            this._emitChange(paramPath, toRGB(input.value), paramDef.num_components || 3);
         });
 
         return input;

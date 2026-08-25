@@ -223,6 +223,8 @@ export class AuroraSession extends EventEmitter {
      * @param {string}       [opts.assetKey] — S3 key of an uploaded file, for
      *                       file parameters. The session downloads it and sets
      *                       the parameter to the resulting local path.
+     * @param {boolean} [opts.skipExport] — set the parameter but skip the cook
+     *                       and geometry export; no geometry_ready follows.
      */
     updateParameter(paramPath, value, numComponents = 1, opts = {}) {
         const message = {
@@ -232,6 +234,8 @@ export class AuroraSession extends EventEmitter {
             num_components: numComponents
         };
         if (opts.assetKey) message.asset_key = opts.assetKey;
+        // Apply the parameter without cooking (used while cooking is paused).
+        if (opts.skipExport) message.skip_export = true;
         this.send(message);
     }
 

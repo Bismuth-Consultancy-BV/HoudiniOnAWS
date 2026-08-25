@@ -379,6 +379,9 @@ class HoudiniRunner:
         value = command.get("value")
         num_components = command.get("num_components", 1)
         asset_key = command.get("asset_key")
+        # Set by the client when cooking is paused: apply the parameter so the
+        # session stays in sync, but do not cook or export.
+        skip_export = bool(command.get("skip_export"))
 
         if not param_path or value is None:
             return {"error": "Missing param or value"}
@@ -430,6 +433,20 @@ class HoudiniRunner:
             # export_geometry() will cook the full dependency chain
             # (EXPORT_NODE_REF -> HDA) automatically.
 
+            if skip_export:
+                update_time = time.time() - update_start
+                logger.info(
+                    f"--- Parameter Update Complete "
+                    f"({update_time:.3f}s, export skipped) ---"
+                )
+                return {
+                    "action": "parameter_updated",
+                    "status": "success",
+                    "param": param_path,
+                    "old_value": old_value,
+                    "new_value": value,
+                }
+
             # Export geometry via GLTF ROP
             logger.info("Exporting geometry...")
             geometry_result = self.export_geometry()
@@ -470,7 +487,20 @@ class HoudiniRunner:
             # Create a temp directory for the export
             export_dir = tempfile.mkdtemp(prefix="houdini_export_")
 
-            # Trigger the GLTF ROP render
+            # Cook the HDA on its own so cook time is reported separately from
+            # the GLB write below — rop.render() would otherwise absorb both.
+            cook_time = 0.0
+            if self.hda_node:
+                cook_start = time.time()
+                try:
+                    self.hda_node.cook(force=False)
+                except Exception as e:
+                    # Not fatal here — the ROP render below raises the real error.
+                    logger.warning(f"HDA cook reported an error: {e}")
+                cook_time = time.time() - cook_start
+                logger.info(f"HDA cooked in {cook_time:.3f}s")
+
+            # Trigger the GLTF ROP render (geometry is cooked, so this is the write)
             logger.info("Triggering GLTF export ROP...")
             render_start = time.time()
             gltf_path = export_gltf(output_dir=export_dir)
@@ -544,7 +574,8 @@ class HoudiniRunner:
             export_time = time.time() - export_start
             logger.info(
                 f"Geometry export complete in {export_time:.3f}s "
-                f"(render: {render_time:.3f}s, upload: {upload_time:.3f}s)"
+                f"(cook: {cook_time:.3f}s, write: {render_time:.3f}s, "
+                f"upload: {upload_time:.3f}s)"
             )
 
             return {
@@ -555,6 +586,13 @@ class HoudiniRunner:
                 "format": "gltf",
                 "point_count": point_count,
                 "primitive_count": prim_count,
+                "file_size_bytes": file_size,
+                "timings": {
+                    "cook_s": round(cook_time, 3),
+                    "export_s": round(render_time, 3),
+                    "upload_s": round(upload_time, 3),
+                    "server_total_s": round(export_time, 3),
+                },
             }
 
         except Exception as e:

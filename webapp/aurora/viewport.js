@@ -17,6 +17,8 @@ import { ViewportGizmo } from 'https://cdn.jsdelivr.net/npm/three-viewport-gizmo
 
 const HDRI_URL = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/flamingo_pan_1k.hdr';
 const BG_COLOR = 0x1a1a2e;
+// Per-mesh triangle ceiling for wireframe generation (see _addWireframe).
+const MAX_WIREFRAME_TRIANGLES = 1_000_000;
 
 export class AuroraViewport {
     /**
@@ -41,6 +43,8 @@ export class AuroraViewport {
         this._originalMaterials = new Map();
         this._animationId = null;
         this._disposed = false;
+        this._frameCallback = null;
+        this._modelStats = null;
 
         this._build();
     }
@@ -140,8 +144,31 @@ export class AuroraViewport {
         if (this._disposed) return;
         this._animationId = requestAnimationFrame(() => this._animate());
         this._orbit.update();
+
+        // Time the frame when something is waiting on it: the first render after
+        // a new model is where three.js uploads the buffers to the GPU, so this
+        // is the only frame whose cost reflects the model's size.
+        const waiter = this._frameCallback;
+        const t0 = waiter ? performance.now() : 0;
+
         this._renderer.render(this._scene, this._camera);
         this._gizmo.render();
+
+        if (waiter) {
+            this._frameCallback = null;
+            waiter(performance.now() - t0);
+        }
+    }
+
+    /**
+     * Run cb after the next rendered frame, passing that frame's duration in ms.
+     * @private
+     */
+    _afterNextRender(cb) {
+        // Flush any pending waiter so its promise cannot hang if a second load
+        // lands before the first frame of the previous one.
+        if (this._frameCallback) this._frameCallback(NaN);
+        this._frameCallback = cb;
     }
 
     _onResize() {
@@ -265,8 +292,31 @@ export class AuroraViewport {
     _addWireframe(obj) {
         obj.traverse((child) => {
             if (!child.isMesh) return;
+
+            // WireframeGeometry dedupes edges through a Set, which V8 caps at
+            // ~16.7M entries (3 edges per triangle). Dense meshes blow past that
+            // and throw "Set maximum size exceeded" — and a wireframe with that
+            // many line segments would be unusable anyway. Skip them.
+            const geo = child.geometry;
+            const triCount = (geo.index ? geo.index.count : geo.getAttribute('position')?.count ?? 0) / 3;
+            if (triCount > MAX_WIREFRAME_TRIANGLES) {
+                console.warn(
+                    `[AuroraViewport] Skipping wireframe for mesh with ${Math.round(triCount).toLocaleString()} ` +
+                    `triangles (limit ${MAX_WIREFRAME_TRIANGLES.toLocaleString()})`
+                );
+                return;
+            }
+
+            let wireGeo;
+            try {
+                wireGeo = new THREE.WireframeGeometry(geo);
+            } catch (err) {
+                console.warn('[AuroraViewport] Wireframe generation failed for mesh:', err);
+                return;
+            }
+
             const wire = new THREE.LineSegments(
-                new THREE.WireframeGeometry(child.geometry),
+                wireGeo,
                 new THREE.LineBasicMaterial({ color: 0xff6600, transparent: true, opacity: 1.0 })
             );
             wire.position.copy(child.position);
@@ -295,16 +345,27 @@ export class AuroraViewport {
      * @param {string}  url
      * @param {object}  [opts]
      * @param {boolean} [opts.resetView=false] — reset scale & camera (use for new HDA)
-     * @returns {Promise<void>}
+     * @returns {Promise<{parseMs:number, setupMs:number, drawMs:number,
+     *                    meshes:number, triangles:number, vertices:number}>}
+     *          Resolves once the model has been drawn once, not merely parsed.
      */
     loadModel(url, opts = {}) {
         if (opts.resetView) this._modelScale = null;
         return new Promise((resolve, reject) => {
+            const start = performance.now();
             new GLTFLoader().load(
                 url,
                 (gltf) => {
+                    const parseMs = performance.now() - start;
+
+                    // _setModel walks every vertex (bounding box, stats), so on a
+                    // dense model it costs real time between parse and first frame.
+                    const setupStart = performance.now();
                     this._setModel(gltf.scene);
-                    resolve();
+                    const setupMs = performance.now() - setupStart;
+
+                    this._afterNextRender((drawMs) =>
+                        resolve({ parseMs, setupMs, drawMs, ...this._modelStats }));
                 },
                 undefined,
                 (err) => {
@@ -319,7 +380,7 @@ export class AuroraViewport {
      * Load a model from a File or Blob.
      * @param {File|Blob} file
      * @param {object}    [opts]  — same options as loadModel
-     * @returns {Promise<void>}
+     * @returns {Promise<object>}  — same stats as loadModel
      */
     loadModelFromFile(file, opts = {}) {
         const url = URL.createObjectURL(file);
@@ -370,19 +431,40 @@ export class AuroraViewport {
         this._model = scene;
         this._scene.add(this._model);
 
+        // Mesh statistics, reported alongside the load timings
+        let meshes = 0, triangles = 0, vertices = 0;
+        this._model.traverse((o) => {
+            if (!o.isMesh) return;
+            meshes++;
+            const pos = o.geometry.attributes.position;
+            const count = pos ? pos.count : 0;
+            vertices += count;
+            triangles += (o.geometry.index ? o.geometry.index.count : count) / 3;
+        });
+        this._modelStats = { meshes, triangles, vertices };
+
         // Compute bounding box
         const box = new THREE.Box3().setFromObject(this._model);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
 
-        // Lock scale on first load, reuse for subsequent loads
-        if (isFirstLoad) {
-            this._modelScale = 5 / Math.max(size.x, size.y, size.z);
+        // A GLB with no renderable geometry (or a single degenerate point) yields a
+        // zero-size box. 5 / 0 is Infinity, which makes the transform NaN so nothing
+        // draws — and it sticks, because _modelScale is only recomputed while falsy.
+        // Leave the model untransformed and _modelScale unset instead.
+        if (!Number.isFinite(maxDim) || maxDim <= 0) {
+            console.warn('[AuroraViewport] Model has no measurable bounds — empty or degenerate geometry');
+        } else {
+            // Lock scale on first load, reuse for subsequent loads
+            if (isFirstLoad) {
+                this._modelScale = 5 / maxDim;
+            }
+
+            // Apply scale and center at origin
+            this._model.scale.setScalar(this._modelScale);
+            this._model.position.copy(center).negate().multiplyScalar(this._modelScale);
         }
-
-        // Apply scale and center at origin
-        this._model.scale.setScalar(this._modelScale);
-        this._model.position.copy(center).negate().multiplyScalar(this._modelScale);
 
         // Only reset camera on first load
         if (isFirstLoad) {

@@ -76,6 +76,15 @@ export class AuroraApp extends EventEmitter {
         this._pendingNewHDA = false;
         this._startupWatchdog = null;
         this._sessionEverReady = false;
+        this._cookRequestedAt = null;
+
+        // Cooking control (menu bar)
+        this._cookEnabled = true;
+        this._cookMode = 'auto';          // 'auto' | 'mouseup'
+        this._cookInFlight = false;
+        this._queuedCook = null;
+        this._cookPending = false;        // parameters changed while paused
+        this._lastSentValues = new Map();
 
         // DOM references (populated by mount())
         this._el = {};
@@ -124,9 +133,23 @@ export class AuroraApp extends EventEmitter {
             hdaFileInput:        $('hdaFileInput'),
             viewerMount:         $('viewerMount'),
             geometryLoader:      $('geometryLoader'),
+            cookEnabled:         $('cookEnabled'),
+            cookModeAuto:        $('cookModeAuto'),
+            cookModeMouseUp:     $('cookModeMouseUp'),
             geometryInfo:        $('geometryInfo'),
             pointCount:          $('pointCount'),
             primCount:           $('primCount'),
+            triCount:            $('triCount'),
+            geoSize:             $('geoSize'),
+            statCook:            $('statCook'),
+            statExport:          $('statExport'),
+            statUpload:          $('statUpload'),
+            statDownload:        $('statDownload'),
+            statParse:           $('statParse'),
+            statSetup:           $('statSetup'),
+            statDraw:            $('statDraw'),
+            statToScreen:        $('statToScreen'),
+            statTotal:           $('statTotal'),
             loadingText:         $('loadingText'),
             loadingSection:      $('loadingSection'),
             emptyState:          $('emptyState'),
@@ -155,6 +178,11 @@ export class AuroraApp extends EventEmitter {
 
         // Menu bar — event delegation via data-action attributes
         this._el.menuBar?.addEventListener('click', (e) => this._onMenuBarClick(e));
+
+        // Cook on/off
+        this._el.cookEnabled?.addEventListener('change', (e) =>
+            this._setCookEnabled(e.target.checked));
+        this._updateCookModeUI();
 
         // Log console toggle
         this._el.logConsole?.querySelector('.log-console-header')
@@ -292,10 +320,7 @@ export class AuroraApp extends EventEmitter {
 
         if (!this._paramUI) {
             this._paramUI = new AuroraParameters(this._el.parametersContainer);
-            this._paramUI.on('change', ({ paramPath, value, numComponents }) => {
-                this._showGeometryLoader();
-                this._session.updateParameter(paramPath, value, numComponents);
-            });
+            this._paramUI.on('change', (evt) => this._onParameterChange(evt));
             this._paramUI.on('fileselect', ({ paramPath, file }) => {
                 this._uploadParameterFile(paramPath, file);
             });
@@ -317,8 +342,7 @@ export class AuroraApp extends EventEmitter {
         }
 
         this._paramUI.setFileStatus(paramPath, file.name, 'ok');
-        this._showGeometryLoader();
-        this._session.updateParameter(paramPath, file.name, 1, { assetKey: asset.s3_key });
+        this._applyParameter(paramPath, file.name, 1, { assetKey: asset.s3_key });
     }
 
     /** @private */
@@ -500,6 +524,8 @@ export class AuroraApp extends EventEmitter {
 
     /** @private */
     _showGeometryLoader() {
+        // Start of the round trip the timing readout measures.
+        this._cookRequestedAt = performance.now();
         if (this._el.geometryLoader) this._el.geometryLoader.style.display = 'flex';
     }
 
@@ -537,6 +563,9 @@ export class AuroraApp extends EventEmitter {
                 case 'export':
                     this.exportScene();
                     break;
+                case 'cook-mode':
+                    this._setCookMode(actionEl.dataset.mode);
+                    break;
             }
         }
     }
@@ -552,6 +581,105 @@ export class AuroraApp extends EventEmitter {
     /** @private */
     _closeAllMenus() {
         document.querySelectorAll('.menu-dropdown').forEach(d => d.classList.remove('open'));
+    }
+
+    /* ================================================================== */
+    /*  Cooking control                                                    */
+    /* ================================================================== */
+
+    /**
+     * A parameter control changed. `live` is true mid-drag; in "On Mouse Up"
+     * mode those are ignored and the control's commit event does the cooking.
+     * @private
+     */
+    _onParameterChange({ paramPath, value, numComponents, live }) {
+        if (live && this._cookMode !== 'auto') return;
+        this._applyParameter(paramPath, value, numComponents);
+    }
+
+    /**
+     * Send a parameter to the session, cooking unless cooking is paused.
+     * @private
+     */
+    _applyParameter(paramPath, value, numComponents, opts = {}) {
+        // A drag emits the same value repeatedly at the ends of its range.
+        const signature = JSON.stringify(value);
+        if (!opts.assetKey && this._lastSentValues.get(paramPath) === signature) return;
+        this._lastSentValues.set(paramPath, signature);
+
+        if (!this._cookEnabled) {
+            // Keep the session's parameters in sync, but do not cook. Re-enabling
+            // "Cook" is what brings the viewport back up to date.
+            this._cookPending = true;
+            this._session.updateParameter(paramPath, value, numComponents,
+                { ...opts, skipExport: true });
+            return;
+        }
+
+        if (this._cookInFlight) {
+            // A drag outruns the cook — keep only the newest value.
+            this._queuedCook = { paramPath, value, numComponents, opts };
+            return;
+        }
+
+        this._cookInFlight = true;
+        this._showGeometryLoader();
+        this._session.updateParameter(paramPath, value, numComponents, opts);
+    }
+
+    /** @private — send whatever a drag queued up behind the last cook. */
+    _flushQueuedCook() {
+        const queued = this._queuedCook;
+        this._queuedCook = null;
+        if (!queued || !this._cookEnabled) return;
+
+        this._cookInFlight = true;
+        this._showGeometryLoader();
+        this._session.updateParameter(
+            queued.paramPath, queued.value, queued.numComponents, queued.opts);
+    }
+
+    /** @private */
+    _setCookEnabled(enabled) {
+        this._cookEnabled = enabled;
+        if (this._el.cookEnabled) this._el.cookEnabled.checked = enabled;
+        this._el.cookEnabled?.closest('.menu-checkbox')
+            ?.classList.toggle('cook-off', !enabled);
+
+        this._addLog('info',
+            enabled ? 'Cooking resumed' : 'Cooking paused — parameter changes will not recook',
+            'Client');
+
+        // Parameters changed while paused are already set on the session, so a
+        // plain geometry request is enough to catch the viewport up.
+        if (enabled && this._cookPending && !this._cookInFlight) {
+            this._cookPending = false;
+            this._cookInFlight = true;
+            this._showGeometryLoader();
+            this._session.requestGeometry();
+        }
+    }
+
+    /** @private */
+    _setCookMode(mode) {
+        this._cookMode = mode === 'mouseup' ? 'mouseup' : 'auto';
+        this._updateCookModeUI();
+        this._addLog('info',
+            `Cooking mode: ${this._cookMode === 'auto' ? 'Auto' : 'On Mouse Up'}`,
+            'Client');
+    }
+
+    /** @private */
+    _updateCookModeUI() {
+        const options = { cookModeAuto: 'auto', cookModeMouseUp: 'mouseup' };
+        for (const [id, mode] of Object.entries(options)) {
+            const el = this._el[id];
+            if (!el) continue;
+            const active = this._cookMode === mode;
+            const icon = el.querySelector('.menu-icon');
+            if (icon) icon.textContent = active ? '✓' : '';
+            el.classList.toggle('menu-option-active', active);
+        }
     }
 
     /* ================================================================== */
@@ -607,8 +735,12 @@ export class AuroraApp extends EventEmitter {
     /*  Geometry                                                           */
     /* ================================================================== */
 
-    /** @private */
-    _loadGeometry(url) {
+    /**
+     * @private
+     * @param {string} url
+     * @param {object} [serverTimings] — the `timings` block from geometry_ready
+     */
+    _loadGeometry(url, serverTimings) {
         if (!this._viewport) {
             console.warn('[AuroraApp] Viewport not initialised');
             return;
@@ -616,9 +748,95 @@ export class AuroraApp extends EventEmitter {
         const resetView = this._pendingNewHDA;
         this._pendingNewHDA = false;
 
-        this._viewport.loadModel(url, { resetView })
-            .then(() => this._emit('geometry:loaded', { url }))
+        const requestedAt = this._cookRequestedAt;
+        this._cookRequestedAt = null;
+
+        // Fetch first and hand the blob to the viewport, so download time is
+        // measured on its own instead of hiding inside the GLTF parse.
+        const start = performance.now();
+        fetch(url)
+            .then((resp) => {
+                if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+                return resp.blob();
+            })
+            .then((blob) => {
+                const downloadMs = performance.now() - start;
+                return this._viewport.loadModelFromFile(blob, { resetView })
+                    .then(stats => ({ ...stats, downloadMs, bytes: blob.size }));
+            })
+            .then((stats) => {
+                this._reportGeometryStats(stats, serverTimings, requestedAt);
+                this._emit('geometry:loaded', { url, stats });
+            })
             .catch(err => console.error('[AuroraApp] Error loading geometry:', err));
+    }
+
+    /**
+     * Log and display the per-stage cost of the geometry that just arrived.
+     * Server stages come from the session; client stages are measured here.
+     * @private
+     */
+    _reportGeometryStats(stats, serverTimings, requestedAt) {
+        const t = serverTimings || {};
+        const ms = (v) => (Number.isFinite(v) ? `${(v / 1000).toFixed(2)}s` : '-');
+        const sec = (v) => (Number.isFinite(v) ? `${v.toFixed(2)}s` : '-');
+
+        const total = Number.isFinite(requestedAt)
+            ? ms(performance.now() - requestedAt)
+            : '-';
+
+        // Everything between the download starting and the model's first frame.
+        // Excludes only the wait for the next animation frame (~one frame).
+        const toScreen = stats.downloadMs + stats.parseMs + stats.setupMs + stats.drawMs;
+
+        const row = {
+            statCook:     sec(t.cook_s),
+            statExport:   sec(t.export_s),
+            statUpload:   sec(t.upload_s),
+            statDownload: ms(stats.downloadMs),
+            statParse:    ms(stats.parseMs),
+            statSetup:    ms(stats.setupMs),
+            statDraw:     ms(stats.drawMs),
+            statToScreen: ms(toScreen),
+            statTotal:    total,
+            triCount:     this._fmtCount(stats.triangles),
+            geoSize:      this._fmtBytes(stats.bytes),
+        };
+        for (const [id, value] of Object.entries(row)) {
+            if (this._el[id]) this._el[id].textContent = value;
+        }
+
+        this._addLog('info',
+            `Geometry displayed in ${total} — cook ${row.statCook} · ` +
+            `export ${row.statExport} · upload ${row.statUpload} · ` +
+            `download ${row.statDownload} · parse ${row.statParse} · ` +
+            `setup ${row.statSetup} · draw ${row.statDraw} ` +
+            `[S3→screen ${row.statToScreen}] (${row.triCount} tris, ${row.geoSize})`,
+            'Timing');
+    }
+
+    /** @private */
+    _resetGeometryStats() {
+        const ids = ['pointCount', 'primCount', 'triCount', 'geoSize', 'statCook',
+                     'statExport', 'statUpload', 'statDownload', 'statParse',
+                     'statSetup', 'statDraw', 'statToScreen', 'statTotal'];
+        ids.forEach(id => { if (this._el[id]) this._el[id].textContent = '-'; });
+    }
+
+    /** @private */
+    _fmtBytes(bytes) {
+        if (!Number.isFinite(bytes)) return '-';
+        if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+        if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${bytes} B`;
+    }
+
+    /** @private */
+    _fmtCount(n) {
+        if (!Number.isFinite(n)) return '-';
+        if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+        if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+        return `${Math.round(n)}`;
     }
 
     /** @private */
@@ -694,13 +912,19 @@ export class AuroraApp extends EventEmitter {
                 `Parameters extracted from HDA (${paramCount} params, ${data.node_count} nodes)`,
                 'Client');
             this._pendingNewHDA = true;
+            this._lastSentValues.clear();
+            this._queuedCook = null;
+            this._cookInFlight = false;
+            this._cookPending = false;
+            // The session exports the initial geometry as soon as it has sent
+            // the parameters, so this is where that first round trip starts.
+            this._cookRequestedAt = performance.now();
 
             // Reset geometry state
             this._currentGeometryUrl = null;
             this._setMenuEnabled('export', false);
             if (this._el.geometryInfo) this._el.geometryInfo.style.display = 'none';
-            if (this._el.pointCount) this._el.pointCount.textContent = '-';
-            if (this._el.primCount) this._el.primCount.textContent = '-';
+            this._resetGeometryStats();
             if (this._viewport) this._viewport.clearModel();
 
             // Build parameter UI
@@ -714,10 +938,12 @@ export class AuroraApp extends EventEmitter {
 
         s.on('geometry_ready', (geo) => {
             this._hideGeometryLoader();
+            this._cookInFlight = false;
 
             if (geo.error) {
                 this._addLog('error', `Geometry export failed: ${geo.error}`, 'Houdini');
                 if (this._pendingSave) this._pendingSave = false;
+                this._queuedCook = null;
                 alert('Geometry export error: ' + geo.error);
                 return;
             }
@@ -730,7 +956,7 @@ export class AuroraApp extends EventEmitter {
                     this._pendingSave = false;
                     this._downloadGeometry(geo.url);
                 } else {
-                    this._loadGeometry(geo.url);
+                    this._loadGeometry(geo.url, geo.timings);
                 }
 
                 this._addLog('info',
@@ -743,6 +969,7 @@ export class AuroraApp extends EventEmitter {
             if (this._el.primCount) this._el.primCount.textContent = geo.primitive_count || '-';
 
             this._emit('geometry:ready', geo);
+            this._flushQueuedCook();
         });
 
         s.on('idle_warning', (data) => {

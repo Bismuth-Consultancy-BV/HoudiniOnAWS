@@ -56,6 +56,42 @@
                     </button>
                 </div>
             </div>
+            <div class="menu-item">
+                <button class="menu-button">Statistics</button>
+                <div class="menu-dropdown menu-dropdown-stats">
+                    <div class="stat-group">Geometry</div>
+                    <div class="stat-row"><span>Triangles</span><span id="triCount">-</span></div>
+                    <div class="stat-row"><span>File size</span><span id="geoSize">-</span></div>
+                    <div class="menu-divider"></div>
+                    <div class="stat-group">Last update</div>
+                    <div class="stat-row"><span>Cook</span><span id="statCook">-</span></div>
+                    <div class="stat-row"><span>Export</span><span id="statExport">-</span></div>
+                    <div class="stat-row"><span>Upload</span><span id="statUpload">-</span></div>
+                    <div class="stat-row"><span>Download</span><span id="statDownload">-</span></div>
+                    <div class="stat-row"><span>Parse</span><span id="statParse">-</span></div>
+                    <div class="stat-row"><span>Setup</span><span id="statSetup">-</span></div>
+                    <div class="stat-row"><span>Draw</span><span id="statDraw">-</span></div>
+                    <div class="menu-divider"></div>
+                    <div class="stat-row stat-row-total"><span>S3 &rarr; screen</span><span id="statToScreen">-</span></div>
+                    <div class="stat-row stat-row-total"><span>Total</span><span id="statTotal">-</span></div>
+                </div>
+            </div>
+            <div class="menu-item">
+                <label class="menu-checkbox" title="Uncheck to stop parameter changes from cooking">
+                    <input type="checkbox" id="cookEnabled" checked> Cook
+                </label>
+            </div>
+            <div class="menu-item">
+                <button class="menu-button">Cooking Mode</button>
+                <div class="menu-dropdown">
+                    <button class="menu-option" id="cookModeAuto" data-action="cook-mode" data-mode="auto">
+                        <span class="menu-icon">✓</span> Auto
+                    </button>
+                    <button class="menu-option" id="cookModeMouseUp" data-action="cook-mode" data-mode="mouseup">
+                        <span class="menu-icon"></span> On Mouse Up
+                    </button>
+                </div>
+            </div>
             <div class="menu-spacer"></div>
             <div class="menu-hda-name" id="menuHdaName"></div>
             <div class="menu-houdini-version" id="menuHoudiniVersion"></div>
@@ -134,6 +170,7 @@
         import { AuroraApp } from './aurora/index.js';
 
         const app = new AuroraApp(CONFIG);
+        window.app = app;   // debug handle: window.app._viewport
         window.addEventListener('load', () => app.mount());
     </script>
 </body>
