@@ -76,22 +76,6 @@
                     <div class="stat-row stat-row-total"><span>Total</span><span id="statTotal">-</span></div>
                 </div>
             </div>
-            <div class="menu-item">
-                <label class="menu-checkbox" title="Uncheck to stop parameter changes from cooking">
-                    <input type="checkbox" id="cookEnabled" checked> Cook
-                </label>
-            </div>
-            <div class="menu-item">
-                <button class="menu-button">Cooking Mode</button>
-                <div class="menu-dropdown">
-                    <button class="menu-option" id="cookModeAuto" data-action="cook-mode" data-mode="auto">
-                        <span class="menu-icon">✓</span> Auto
-                    </button>
-                    <button class="menu-option" id="cookModeMouseUp" data-action="cook-mode" data-mode="mouseup">
-                        <span class="menu-icon"></span> On Mouse Up
-                    </button>
-                </div>
-            </div>
             <div class="menu-spacer"></div>
             <div class="menu-hda-name" id="menuHdaName"></div>
             <div class="menu-houdini-version" id="menuHoudiniVersion"></div>
@@ -122,6 +106,15 @@
                             </svg>
                             Houdini Console
                         </span>
+                        <div class="log-console-controls" id="cookControls">
+                            <label class="menu-checkbox" title="Uncheck to stop parameter changes from cooking">
+                                <input type="checkbox" id="cookEnabled" checked> Cook
+                            </label>
+                            <select class="menu-select" id="cookMode" title="When parameter changes trigger a cook">
+                                <option value="auto">Auto</option>
+                                <option value="mouseup">On Mouse Up</option>
+                            </select>
+                        </div>
                         <span class="log-console-toggle">▲</span>
                     </div>
                     <div class="log-console-body">

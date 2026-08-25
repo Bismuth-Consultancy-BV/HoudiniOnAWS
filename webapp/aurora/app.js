@@ -134,8 +134,8 @@ export class AuroraApp extends EventEmitter {
             viewerMount:         $('viewerMount'),
             geometryLoader:      $('geometryLoader'),
             cookEnabled:         $('cookEnabled'),
-            cookModeAuto:        $('cookModeAuto'),
-            cookModeMouseUp:     $('cookModeMouseUp'),
+            cookMode:            $('cookMode'),
+            cookControls:        $('cookControls'),
             geometryInfo:        $('geometryInfo'),
             pointCount:          $('pointCount'),
             primCount:           $('primCount'),
@@ -179,14 +179,19 @@ export class AuroraApp extends EventEmitter {
         // Menu bar — event delegation via data-action attributes
         this._el.menuBar?.addEventListener('click', (e) => this._onMenuBarClick(e));
 
-        // Cook on/off
+        // Cook on/off, and when changes trigger a cook
         this._el.cookEnabled?.addEventListener('change', (e) =>
             this._setCookEnabled(e.target.checked));
+        this._el.cookMode?.addEventListener('change', (e) =>
+            this._setCookMode(e.target.value));
         this._updateCookModeUI();
 
         // Log console toggle
         this._el.logConsole?.querySelector('.log-console-header')
             ?.addEventListener('click', () => this._toggleLogConsole());
+
+        // The cook controls sit in that header — don't let their clicks toggle it
+        this._el.cookControls?.addEventListener('click', (e) => e.stopPropagation());
 
         // Close menus on outside click
         document.addEventListener('click', (e) => {
@@ -563,9 +568,6 @@ export class AuroraApp extends EventEmitter {
                 case 'export':
                     this.exportScene();
                     break;
-                case 'cook-mode':
-                    this._setCookMode(actionEl.dataset.mode);
-                    break;
             }
         }
     }
@@ -671,15 +673,7 @@ export class AuroraApp extends EventEmitter {
 
     /** @private */
     _updateCookModeUI() {
-        const options = { cookModeAuto: 'auto', cookModeMouseUp: 'mouseup' };
-        for (const [id, mode] of Object.entries(options)) {
-            const el = this._el[id];
-            if (!el) continue;
-            const active = this._cookMode === mode;
-            const icon = el.querySelector('.menu-icon');
-            if (icon) icon.textContent = active ? '✓' : '';
-            el.classList.toggle('menu-option-active', active);
-        }
+        if (this._el.cookMode) this._el.cookMode.value = this._cookMode;
     }
 
     /* ================================================================== */

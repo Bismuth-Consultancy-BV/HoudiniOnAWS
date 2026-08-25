@@ -372,6 +372,7 @@ body {
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     transition: height 0.3s ease;
     height: 250px;
+    overflow: hidden;
     z-index: 500;
 }
 
@@ -383,7 +384,10 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 16px;
+    gap: 12px;
+    height: 40px;
+    box-sizing: border-box;
+    padding: 0 16px;
     background: rgba(30, 41, 59, 0.8);
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     cursor: pointer;
@@ -407,6 +411,24 @@ body {
 
 .log-console-title svg {
     stroke: #4299e1;
+}
+
+/* Cook controls, pushed to the right of the console header */
+.log-console-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    cursor: default;
+}
+
+.log-console-controls .menu-checkbox {
+    padding: 0;
+}
+
+.log-console-controls .menu-select {
+    margin: 0;
+    padding: 2px 6px;
 }
 
 .log-console-toggle {
@@ -618,8 +640,21 @@ body {
     color: #fbbf24;
 }
 
-.menu-option-active {
+.menu-select {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #cbd5e1;
+    font-family: inherit;
+    font-size: 0.85em;
+    padding: 4px 8px;
+    margin: 0 4px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.menu-select:hover {
     color: #f1f5f9;
+    border-color: #475569;
 }
 
 /* Statistics dropdown — a readout, not a list of actions */
