@@ -74,6 +74,8 @@ export class AuroraApp extends EventEmitter {
         this._currentGeometryUrl = null;
         this._pendingSave = false;
         this._pendingNewHDA = false;
+        this._exportOutputs = [];         // outputs advertised by the loaded HDA
+        this._exportLoaderMessage = null; // indicator text while an export cooks
         this._startupWatchdog = null;
         this._sessionEverReady = false;
         this._cookRequestedAt = null;
@@ -133,6 +135,7 @@ export class AuroraApp extends EventEmitter {
             hdaFileInput:        $('hdaFileInput'),
             viewerMount:         $('viewerMount'),
             geometryLoader:      $('geometryLoader'),
+            geometryLoaderText:  $('geometryLoaderText'),
             cookEnabled:         $('cookEnabled'),
             cookMode:            $('cookMode'),
             cookControls:        $('cookControls'),
@@ -163,6 +166,10 @@ export class AuroraApp extends EventEmitter {
             menuLoadHDABtn:      $('menuLoadHDABtn'),
             menuTerminateBtn:    $('menuTerminateBtn'),
             menuExportBtn:       $('menuExportBtn'),
+            exportModal:         $('exportModal'),
+            exportOutputSelect:  $('exportOutputSelect'),
+            exportConfirmBtn:    $('exportConfirmBtn'),
+            exportCancelBtn:     $('exportCancelBtn'),
             logConsole:          $('logConsole'),
             logMessages:         $('logMessages'),
         };
@@ -192,6 +199,17 @@ export class AuroraApp extends EventEmitter {
 
         // The cook controls sit in that header — don't let their clicks toggle it
         this._el.cookControls?.addEventListener('click', (e) => e.stopPropagation());
+
+        // Export dialog
+        this._el.exportConfirmBtn?.addEventListener('click', () => this._confirmExport());
+        this._el.exportCancelBtn?.addEventListener('click', () => this._hideExportModal());
+        this._el.exportModal?.addEventListener('click', (e) => {
+            // Click on the backdrop, not the dialog itself, dismisses it.
+            if (e.target === this._el.exportModal) this._hideExportModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') this._hideExportModal();
+        });
 
         // Close menus on outside click
         document.addEventListener('click', (e) => {
@@ -278,16 +296,98 @@ export class AuroraApp extends EventEmitter {
     }
 
     /**
-     * Export the current scene geometry as a GLB download.
+     * Export scene geometry as a GLB download.
+     *
+     * An asset can expose more than one output — typically light preview
+     * geometry on output 0 for the viewport, and heavier delivery geometry on
+     * a later one. When it does, ask which output to save; otherwise there is
+     * nothing to choose and the export runs straight away.
      */
     exportScene() {
         if (!this._currentGeometryUrl) {
             alert('No geometry available to export.');
             return;
         }
-        this._addLog('info', 'Requesting fresh geometry download URL...', 'Client');
-        this._session.requestGeometry({ purpose: 'save' });
+
+        if (this._exportOutputs.length > 1) {
+            this._showExportModal();
+            return;
+        }
+
+        this._requestExport(0);
+    }
+
+    /**
+     * @private — ask the session for one output, to be saved rather than drawn.
+     * @param {number} outputIndex
+     */
+    _requestExport(outputIndex) {
+        const output = this._exportOutputs[outputIndex];
+        const label = output ? ` (${output.label})` : '';
+        this._addLog('info',
+            `Exporting output ${outputIndex}${label} — requesting download URL...`,
+            'Client');
+
+        // An export output has usually never cooked before, so this can take
+        // far longer than a viewport recook. Say what is happening, and which
+        // output it is happening to.
+        this._exportLoaderMessage = this._exportOutputs.length > 1
+            ? `Cooking output ${outputIndex}${this._shortLabel(output)} for export...`
+            : 'Cooking geometry for export...';
+        this._showGeometryLoader(this._exportLoaderMessage, { trackTiming: false });
+
         this._pendingSave = true;
+        this._session.requestGeometry({ purpose: 'save', output_index: outputIndex });
+    }
+
+    /**
+     * @private — an output label in parentheses, short enough to keep the
+     * loader overlay on one line.
+     */
+    _shortLabel(output) {
+        if (!output?.label) return '';
+        const label = output.label.length > 28
+            ? `${output.label.slice(0, 27)}…`
+            : output.label;
+        return ` (${label})`;
+    }
+
+    /** @private — populate and open the output picker. */
+    _showExportModal() {
+        const select = this._el.exportOutputSelect;
+        if (!select || !this._exportOutputs.length) {
+            // Nothing to choose between — fall back to the viewport output.
+            this._requestExport(0);
+            return;
+        }
+
+        select.innerHTML = '';
+        for (const output of this._exportOutputs) {
+            const opt = document.createElement('option');
+            opt.value = String(output.index);
+            opt.textContent = `${output.index} — ${output.label}`;
+            select.appendChild(opt);
+        }
+
+        // Default to the last output: an asset that bothers to expose several
+        // is almost always keeping its deliverable on the final one.
+        select.value = String(this._exportOutputs[this._exportOutputs.length - 1].index);
+
+        this._el.exportModal?.classList.remove('hidden');
+        select.focus();
+    }
+
+    /** @private */
+    _hideExportModal() {
+        this._el.exportModal?.classList.add('hidden');
+    }
+
+    /** @private */
+    _confirmExport() {
+        const raw = this._el.exportOutputSelect?.value;
+        const index = Number.parseInt(raw, 10);
+        this._hideExportModal();
+        this._requestExport(Number.isNaN(index) ? 0 : index);
     }
 
     /* ================================================================== */
@@ -527,10 +627,21 @@ export class AuroraApp extends EventEmitter {
         if (this._el.loadingText) this._el.loadingText.textContent = msg;
     }
 
-    /** @private */
-    _showGeometryLoader() {
-        // Start of the round trip the timing readout measures.
-        this._cookRequestedAt = performance.now();
+    /**
+     * @private
+     * @param {string}  [message]  — what the session is busy doing
+     * @param {object}  [opts]
+     * @param {boolean} [opts.trackTiming=true] — start the round-trip clock the
+     *                  statistics readout reports. Export cooks pass false:
+     *                  they never reach the viewport, so counting them would
+     *                  put an unrelated duration in front of the next cook.
+     */
+    _showGeometryLoader(message = 'Houdini is cooking...', opts = {}) {
+        const { trackTiming = true } = opts;
+        if (trackTiming) this._cookRequestedAt = performance.now();
+        if (this._el.geometryLoaderText) {
+            this._el.geometryLoaderText.textContent = message;
+        }
         if (this._el.geometryLoader) this._el.geometryLoader.style.display = 'flex';
     }
 
@@ -834,7 +945,12 @@ export class AuroraApp extends EventEmitter {
     }
 
     /** @private */
-    async _downloadGeometry(url) {
+    async _downloadGeometry(url, outputIndex) {
+        // The cook is done but the export is not: a heavy output can take a
+        // while to come down off S3, and the browser shows nothing until the
+        // save dialog appears. Runs before the first await, so the loader
+        // never blinks off between the cook and the download.
+        this._showGeometryLoader('Downloading export...', { trackTiming: false });
         try {
             this._addLog('info', 'Downloading geometry...', 'Client');
             const resp = await fetch(url);
@@ -844,7 +960,8 @@ export class AuroraApp extends EventEmitter {
             const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = blobUrl;
-            a.download = `geometry_${Date.now()}.glb`;
+            const suffix = Number.isInteger(outputIndex) ? `_out${outputIndex}` : '';
+            a.download = `geometry${suffix}_${Date.now()}.glb`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -854,6 +971,8 @@ export class AuroraApp extends EventEmitter {
         } catch (err) {
             console.error('[AuroraApp] Error saving geometry:', err);
             alert('Failed to save geometry: ' + err.message);
+        } finally {
+            this._hideGeometryLoader();
         }
     }
 
@@ -906,6 +1025,7 @@ export class AuroraApp extends EventEmitter {
                 `Parameters extracted from HDA (${paramCount} params, ${data.node_count} nodes)`,
                 'Client');
             this._pendingNewHDA = true;
+            this._exportOutputs = Array.isArray(data.outputs) ? data.outputs : [];
             this._lastSentValues.clear();
             this._queuedCook = null;
             this._cookInFlight = false;
@@ -934,9 +1054,20 @@ export class AuroraApp extends EventEmitter {
             this._hideGeometryLoader();
             this._cookInFlight = false;
 
+            // Viewport cooks and export requests come back on the same event,
+            // and a slider drag can land one in between the two halves of an
+            // export. Route on the purpose the session echoes back rather than
+            // on local state, so a stray cook is never saved to disk — falling
+            // back to the flag for a session that does not send one.
+            const isSave = geo.purpose === 'save'
+                || (geo.purpose === undefined && this._pendingSave);
+
             if (geo.error) {
                 this._addLog('error', `Geometry export failed: ${geo.error}`, 'Houdini');
-                if (this._pendingSave) this._pendingSave = false;
+                if (isSave) {
+                    this._pendingSave = false;
+                    this._exportLoaderMessage = null;
+                }
                 this._queuedCook = null;
                 alert('Geometry export error: ' + geo.error);
                 return;
@@ -946,15 +1077,30 @@ export class AuroraApp extends EventEmitter {
                 this._currentGeometryUrl = geo.url;
                 this._setMenuEnabled('export', true);
 
-                if (this._pendingSave) {
+                if (isSave) {
                     this._pendingSave = false;
-                    this._downloadGeometry(geo.url);
+                    this._exportLoaderMessage = null;
+                    this._downloadGeometry(geo.url, geo.output_index);
                 } else {
                     this._loadGeometry(geo.url, geo.timings);
+
+                    // A cook already in flight when Export was pressed answers
+                    // first. Put the export indicator back — that work is still
+                    // running, and the hide at the top of this handler took it
+                    // down.
+                    if (this._pendingSave && this._exportLoaderMessage) {
+                        this._showGeometryLoader(this._exportLoaderMessage,
+                            { trackTiming: false });
+                    }
                 }
 
+                const from = Number.isInteger(geo.output_index)
+                    ? ` from output ${geo.output_index}` +
+                      (geo.output_label ? ` (${geo.output_label})` : '')
+                    : '';
                 this._addLog('info',
-                    `Geometry ready: ${geo.point_count} points, ${geo.primitive_count} primitives`,
+                    `Geometry ready${from}: ${geo.point_count} points, ` +
+                    `${geo.primitive_count} primitives`,
                     'Houdini');
             }
 
@@ -1024,5 +1170,8 @@ export class AuroraApp extends EventEmitter {
         this._currentGeometryUrl = null;
         this._pendingSave = false;
         this._pendingNewHDA = false;
+        this._exportOutputs = [];
+        this._exportLoaderMessage = null;
+        this._hideExportModal();
     }
 }

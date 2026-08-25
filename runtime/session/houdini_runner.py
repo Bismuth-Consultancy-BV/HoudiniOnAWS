@@ -18,6 +18,7 @@ import tempfile
 import websockets
 from botocore.config import Config
 from hda_utils import install_and_instantiate_hda, EXPORT_GLTF_PATH
+from hda_utils import set_export_output, VIEWPORT_OUTPUT_INDEX
 from hda_utils import extract_hda_parameters
 from hda_utils import export_gltf
 
@@ -54,6 +55,7 @@ class HoudiniRunner:
         self.input_bucket = input_bucket
         self.output_node = None
         self.hda_node = None  # set when user loads an HDA via menu
+        self.export_outputs = []  # one tap per HDA output, see wire_export_outputs
         self.last_geometry_url = None
         self.running = True
         self.websocket = websocket
@@ -239,7 +241,15 @@ class HoudiniRunner:
             elif action == "update_parameter":
                 return self.update_parameter(command)
             elif action == "get_geometry":
-                geometry_data = self.export_geometry()
+                geometry_data = self.export_geometry(
+                    output_index=command.get("output_index", VIEWPORT_OUTPUT_INDEX)
+                )
+                # Echo the caller's purpose back. Parameter cooks arrive on the
+                # same channel, so without this the client can only guess which
+                # response belongs to a download it asked for.
+                purpose = command.get("purpose")
+                if purpose and isinstance(geometry_data, dict):
+                    geometry_data["purpose"] = purpose
                 return {"action": "geometry_ready", "geometry": geometry_data}
             elif action == "execute_python":
                 return self.execute_python(command)
@@ -288,7 +298,9 @@ class HoudiniRunner:
             self._compat_warning_count = 0
             self._compat_samples = []
             hda_start = time.time()
-            self.hda_node = install_and_instantiate_hda(local_hda_path)
+            self.hda_node, self.export_outputs = install_and_instantiate_hda(
+                local_hda_path
+            )
             hda_time = time.time() - hda_start
             logger.info(f"HDA installed in {hda_time:.2f}s: {self.hda_node.path()}")
 
@@ -310,7 +322,22 @@ class HoudiniRunner:
                 "node_count": node_count,
                 "message": msg,
                 "houdini_version": hou.applicationVersionString(),
+                "outputs": self.export_outputs,
             }
+
+            # An asset with more than one output is opting into the
+            # preview/export split, so say so where the user can see it.
+            if len(self.export_outputs) > 1:
+                names = ", ".join(
+                    f"{o['index']} ({o['label']})" for o in self.export_outputs
+                )
+                self.send_log_to_client(
+                    "info",
+                    f"'{filename}' has {len(self.export_outputs)} outputs: {names}. "
+                    f"The viewport shows output {VIEWPORT_OUTPUT_INDEX}; "
+                    f"Scene > Export lets you pick which one is saved.",
+                    "Session",
+                )
 
             if self._compat_warning_count:
                 result["compatibility_warning"] = {
@@ -333,6 +360,7 @@ class HoudiniRunner:
             logger.error(f"Error extracting HDA parameters: {e}")
             traceback.print_exc()
             self.hda_node = None
+            self.export_outputs = []
             return {"error": f"Failed to extract parameters: {str(e)}"}
 
     def fetch_asset(self, asset_key: str) -> str:
@@ -478,22 +506,60 @@ class HoudiniRunner:
             logger.error(f"Error updating parameter: {e}")
             return {"error": str(e)}
 
-    def export_geometry(self) -> dict:
-        """Export geometry via GLTF ROP and upload to S3."""
+    def export_geometry(self, output_index: int = VIEWPORT_OUTPUT_INDEX) -> dict:
+        """Export one HDA output via the GLTF ROP and upload it to S3.
+
+        Args:
+            output_index: Which HDA output to pull. The viewport always asks
+                for output 0; the export dialog may ask for a later one, which
+                is how an asset keeps cheap preview geometry separate from the
+                heavy result it only cooks on demand. Out-of-range values are
+                clamped to the outputs the asset actually has.
+        """
+
+        selected = None
 
         try:
             export_start = time.time()
 
+            # Aim the export object merge at the requested output. Commands are
+            # serialised through a single worker thread, so no viewport cook can
+            # interleave while this points somewhere other than output 0.
+            if self.export_outputs:
+                try:
+                    requested = int(output_index)
+                except (TypeError, ValueError):
+                    requested = VIEWPORT_OUTPUT_INDEX
+                index = max(0, min(requested, len(self.export_outputs) - 1))
+                if index != requested:
+                    logger.warning(
+                        f"Requested output {output_index} is out of range for this "
+                        f"asset ({len(self.export_outputs)} outputs) — using {index}"
+                    )
+                selected = self.export_outputs[index]
+                set_export_output(selected["node_path"])
+                logger.info(
+                    f"Exporting output {index} ({selected['label']}) "
+                    f"from {selected['node_path']}"
+                )
+                self.send_log_to_client(
+                    "info",
+                    f"Exporting output {index} ({selected['label']})",
+                    "Session",
+                )
+
             # Create a temp directory for the export
             export_dir = tempfile.mkdtemp(prefix="houdini_export_")
 
-            # Cook the HDA on its own so cook time is reported separately from
-            # the GLB write below — rop.render() would otherwise absorb both.
+            # Cook the selected output on its own so cook time is reported
+            # separately from the GLB write below — rop.render() would
+            # otherwise absorb both.
             cook_time = 0.0
-            if self.hda_node:
+            cook_node = hou.node(selected["node_path"]) if selected else self.hda_node
+            if cook_node:
                 cook_start = time.time()
                 try:
-                    self.hda_node.cook(force=False)
+                    cook_node.cook(force=False)
                 except Exception as e:
                     # Not fatal here — the ROP render below raises the real error.
                     logger.warning(f"HDA cook reported an error: {e}")
@@ -525,7 +591,11 @@ class HoudiniRunner:
             )
 
             # Upload to S3
-            s3_key = f"interactive/{self.session_id}/geometry_{int(time.time())}{ext}"
+            out_idx = selected["index"] if selected else VIEWPORT_OUTPUT_INDEX
+            s3_key = (
+                f"interactive/{self.session_id}/"
+                f"geometry_out{out_idx}_{int(time.time())}{ext}"
+            )
             logger.info(f"Uploading to S3: s3://{self.s3_output_bucket}/{s3_key}")
             upload_start = time.time()
             self.s3_client.upload_file(gltf_path, self.s3_output_bucket, s3_key)
@@ -559,9 +629,11 @@ class HoudiniRunner:
             # Try to get point/prim counts from the HDA output
             point_count = 0
             prim_count = 0
-            if self.hda_node:
+            # Read the counts off the tap that was just exported —
+            # hda_node.geometry() would always report output 0.
+            if cook_node:
                 try:
-                    geo = self.hda_node.geometry()
+                    geo = cook_node.geometry()
                     if geo:
                         point_count = geo.intrinsicValue("pointcount")
                         prim_count = geo.intrinsicValue("primitivecount")
@@ -584,6 +656,8 @@ class HoudiniRunner:
                 "geometry_url": geometry_url,
                 "s3_key": s3_key,
                 "format": "gltf",
+                "output_index": out_idx,
+                "output_label": selected["label"] if selected else "",
                 "point_count": point_count,
                 "primitive_count": prim_count,
                 "file_size_bytes": file_size,
@@ -599,6 +673,20 @@ class HoudiniRunner:
             logger.error(f"Error exporting geometry: {e}")
             traceback.print_exc()
             return {"error": str(e)}
+
+        finally:
+            # Leave the pipeline aimed at the viewport output, so the next
+            # parameter change cooks what the user is looking at.
+            if selected and selected["index"] != VIEWPORT_OUTPUT_INDEX:
+                try:
+                    set_export_output(
+                        self.export_outputs[VIEWPORT_OUTPUT_INDEX]["node_path"]
+                    )
+                except Exception as restore_error:
+                    # Never let this mask the export result above.
+                    logger.error(
+                        f"Failed to restore viewport output: {restore_error}"
+                    )
 
     def execute_python(self, command: dict) -> dict:
         """Execute arbitrary Python code in Houdini context."""

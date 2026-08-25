@@ -5,13 +5,13 @@ This module handles:
 - Installing HDA files into a Houdini session
 - Instantiating HDAs inside container nodes
 - Extracting parameter schemas from HDA instances for UI generation
-- Wiring HDA output into the export pipeline
+- Wiring HDA outputs into the export pipeline (one tap node per output)
 """
 
 import logging
 import os
 import hou
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,15 @@ EXPORT_NODE_REF_PATH = "/obj/EXPORT/EXPORT_NODE_REF"
 EXPORT_GLTF_PATH = "/obj/EXPORT/EXPORT_GLTF"
 OBJPATH_PARM = "objpath1"
 
+#: Prefix for the per-output tap nodes created inside CONTAINER.
+OUTPUT_TAP_PREFIX = "AURORA_OUT_"
 
-def install_and_instantiate_hda(hda_file_path: str) -> "hou.Node":
+#: The output the viewport always shows. Later outputs are export-only
+#: unless the user picks one in the export dialog.
+VIEWPORT_OUTPUT_INDEX = 0
+
+
+def install_and_instantiate_hda(hda_file_path: str):
     """
     Install an HDA file and instantiate it inside the CONTAINER node.
 
@@ -30,13 +37,14 @@ def install_and_instantiate_hda(hda_file_path: str) -> "hou.Node":
         1. Verify session_runner.hip nodes exist
         2. Install the HDA definition(s) from the file
         3. Create an instance of the HDA inside /obj/CONTAINER
-        4. Wire the HDA into the EXPORT pipeline by setting objpath1
+        4. Tap every HDA output and wire output 0 into the EXPORT pipeline
 
     Args:
         hda_file_path: Absolute path to the .hda file on disk.
 
     Returns:
-        The instantiated HDA node.
+        A ``(hda_node, outputs)`` tuple, where *outputs* is the list returned by
+        :func:`wire_export_outputs` — one entry per output of the asset.
 
     Raises:
         FileNotFoundError: If the HDA file does not exist.
@@ -127,23 +135,110 @@ def install_and_instantiate_hda(hda_file_path: str) -> "hou.Node":
     logger.info(f"Instantiated HDA node at: {hda_node.path()}")
 
     # --- Wire into EXPORT pipeline ---
-    # The EXPORT_NODE_REF object merge needs the path to pull geometry from.
-    # For a SOP-level HDA inside a geo container, we point to the node's render/display.
-    # We set objpath1 to the full path of the HDA instance node.
-    hda_node_path = hda_node.path()
+    outputs = wire_export_outputs(hda_node)
+
+    # No explicit cook here — the first GLTF ROP render will cook
+    # the full chain (EXPORT_NODE_REF -> tap -> HDA) on demand.
+
+    return hda_node, outputs
+
+
+def wire_export_outputs(hda_node: "hou.Node") -> List[Dict[str, Any]]:
+    """
+    Give every output of *hda_node* its own addressable node, and point the
+    export pipeline at output 0.
+
+    The EXPORT_NODE_REF object merge pulls output 0 of whatever node it is
+    aimed at, so an asset's second and later outputs are unreachable if it
+    points straight at the HDA instance. A null per output — each wired to one
+    specific output connector — makes every output addressable by path.
+
+    That is what lets an asset split preview from delivery: output 0 is the
+    cheap geometry the viewport recooks constantly, while a later output can
+    hold the expensive result that is only cooked when the user exports.
+
+    Args:
+        hda_node: The instantiated HDA node, living inside CONTAINER.
+
+    Returns:
+        One ``{"index", "label", "node_path"}`` dict per output, in connector
+        order.
+
+    Raises:
+        RuntimeError: If the export object merge or its parameter is missing.
+    """
+
+    container_node = hda_node.parent()
+
+    # Drop taps left behind by a previously loaded asset.
+    for child in container_node.children():
+        if child.name().startswith(OUTPUT_TAP_PREFIX):
+            try:
+                child.destroy()
+            except hou.ObjectWasDeleted:
+                pass
+
+    # Output labels come from the asset's Type Properties. Not every build
+    # exposes them, and an unnamed output returns an empty string, so fall
+    # back to the index in both cases.
+    labels = ()
+    try:
+        labels = hda_node.type().outputLabels()
+    except (AttributeError, hou.Error):
+        logger.debug("Output labels unavailable for this node type")
+
+    # outputConnectors() has one entry per connector, connected or not. Assets
+    # that report none still have their single implicit output.
+    output_count = max(len(hda_node.outputConnectors()), 1)
+
+    outputs: List[Dict[str, Any]] = []
+    for index in range(output_count):
+        tap = container_node.createNode("null", f"{OUTPUT_TAP_PREFIX}{index}")
+        tap.setInput(0, hda_node, output_index=index)
+        tap.moveToGoodPosition()
+
+        label = labels[index] if index < len(labels) and labels[index] else ""
+        outputs.append(
+            {
+                "index": index,
+                "label": label or f"Output {index}",
+                "node_path": tap.path(),
+            }
+        )
+
+    logger.info(
+        f"Tapped {output_count} output(s) on {hda_node.path()}: "
+        + ", ".join(f"{o['index']}={o['label']}" for o in outputs)
+    )
+
+    set_export_output(outputs[VIEWPORT_OUTPUT_INDEX]["node_path"])
+
+    return outputs
+
+
+def set_export_output(node_path: str) -> None:
+    """
+    Point the EXPORT object merge at *node_path*.
+
+    Args:
+        node_path: Full path of the tap node to pull geometry from.
+
+    Raises:
+        RuntimeError: If the export object merge or its parameter is missing.
+    """
+
+    export_ref_node = hou.node(EXPORT_NODE_REF_PATH)
+    if not export_ref_node:
+        raise RuntimeError(f"EXPORT_NODE_REF not found at {EXPORT_NODE_REF_PATH}")
+
     export_ref_parm = export_ref_node.parm(OBJPATH_PARM)
     if not export_ref_parm:
         raise RuntimeError(
             f"Parameter '{OBJPATH_PARM}' not found on {EXPORT_NODE_REF_PATH}"
         )
 
-    export_ref_parm.set(hda_node_path)
-    logger.info(f"Set {EXPORT_NODE_REF_PATH}/{OBJPATH_PARM} = {hda_node_path}")
-
-    # No explicit cook here — the first GLTF ROP render will cook
-    # the full chain (EXPORT_NODE_REF -> HDA) on demand.
-
-    return hda_node
+    export_ref_parm.set(node_path)
+    logger.info(f"Set {EXPORT_NODE_REF_PATH}/{OBJPATH_PARM} = {node_path}")
 
 
 def extract_hda_parameters(hda_node: "hou.Node") -> Dict[str, Any]:

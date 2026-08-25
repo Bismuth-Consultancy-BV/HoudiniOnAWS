@@ -296,9 +296,47 @@ The workflow is:
 2. Click "Initialize Session" — the file is uploaded to S3 and an EC2 instance is launched (takes 1-2 minutes).
 3. Parameters from the HDA are automatically displayed as interactive controls.
 4. Adjust parameters — geometry updates in the 3D viewer each time you release a slider.
-5. Click "Terminate Session" when done to clean up the EC2 instance.
+5. Use `Scene > Export` to save the result as a `.glb` file. See [Understanding HDA outputs](#understanding-hda-outputs) if your asset has more than one output.
+6. Click "Terminate Session" when done to clean up the EC2 instance.
 
 Sessions auto-terminate after the configured idle period (default: 15 minutes) to save costs.
+</details>
+
+#### Understanding HDA outputs
+<details>
+<summary>Instructions</summary>
+
+**How geometry reaches the viewport**
+
+Session mode never streams geometry out of Houdini directly. Every cook is written to disk as a GLB, uploaded to S3, and handed to the browser as a presigned URL:
+
+1. `session_runner.hip` contains a fixed export pipeline — an Object Merge (`/obj/EXPORT/EXPORT_NODE_REF`) feeding a GLTF ROP (`/obj/EXPORT/EXPORT_GLTF`).
+2. When your asset is loaded it is instantiated inside `/obj/CONTAINER`, and one `null` "tap" node is created per output of the asset, each wired to a specific output connector.
+3. The Object Merge is aimed at the tap for the output being exported, the ROP renders it to a `.glb`, and the file is uploaded to the session's output bucket.
+4. The browser downloads that GLB and loads it into the three.js viewport.
+
+The tap nodes exist because an Object Merge can only pull output 0 of whatever node it is aimed at. Without them, only the first output of your asset would ever be reachable.
+
+**Splitting preview geometry from export geometry**
+
+The viewport recooks on every parameter change, so an asset that only produces its final, expensive result will feel sluggish to work with. Expose more than one output to avoid that:
+
+- **Output 0** — what the viewport shows. Keep it cheap: lower resolution, fewer scatter points, no expensive solvers. This is the only output that cooks while the user drags a slider.
+- **Output 1 (and beyond)** — the geometry you actually want delivered. These are **only** cooked when the user exports, so they can be as heavy as the result demands.
+
+Nothing is required of a single-output asset — it behaves exactly as before, with its one output used for both the viewport and export.
+
+**Exporting**
+
+`Scene > Export` on a single-output asset saves that output immediately. On an asset with several outputs it opens a dialog listing them, defaulting to the last one, and the chosen output is cooked and downloaded as `geometry_out<N>_<timestamp>.glb`. Which output was used is written to the Houdini Console panel, both when the request is sent and when the geometry comes back.
+
+Output names in the dialog come from the output labels set in the asset's *Type Properties*. Outputs with no label are listed by index.
+
+**Things to know**
+
+- Every output is exported through the same GLTF ROP, so all exports are GLB regardless of which output they came from.
+- A non-preview output has usually never cooked before, so the first export of it pays the full cook cost. The session stays responsive but the download will not be instant — the indicator in the bottom-left names the output while it cooks, and stays up until the file has downloaded.
+- After an export the pipeline is pointed back at output 0, so the next parameter change cooks the preview again.
 </details>
 
 #### 5. Using the Python Client
@@ -404,9 +442,9 @@ You will also need to log into the [AWS console](https://aws.amazon.com/console/
 
   - Session mode
     - [runtime/session/entrypoint.sh](runtime/session/entrypoint.sh) - Boot-time script for interactive session mode (two-process architecture).
-    - [runtime/session/houdini_runner.py](runtime/session/houdini_runner.py) - Hython process that loads HDA, processes parameter updates, and exports GLTF.
+    - [runtime/session/houdini_runner.py](runtime/session/houdini_runner.py) - Hython process that loads HDA, processes parameter updates, and exports GLTF from a selected HDA output.
     - [runtime/session/websocket_handler.py](runtime/session/websocket_handler.py) - Pure asyncio WebSocket bridge between API Gateway and the local Houdini runner.
-    - [runtime/session/hda_utils.py](runtime/session/hda_utils.py) - Utilities for installing/instantiating HDAs and extracting parameter schemas.
+    - [runtime/session/hda_utils.py](runtime/session/hda_utils.py) - Utilities for installing/instantiating HDAs, tapping their outputs into the export pipeline, and extracting parameter schemas.
     - [runtime/session/session_runner.hip](runtime/session/session_runner.hip) - Template HIP file for the session GLTF export pipeline.
 
   - Shared

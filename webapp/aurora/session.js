@@ -242,7 +242,11 @@ export class AuroraSession extends EventEmitter {
     /**
      * Request geometry from the Houdini session.
      * @param {object} [opts]
-     * @param {string} [opts.purpose] — e.g. 'save'
+     * @param {string} [opts.purpose]      — e.g. 'save'
+     * @param {number} [opts.output_index] — which HDA output to cook and
+     *                 export. Omitted (or 0) means the viewport output; the
+     *                 export dialog passes a later index for assets that keep
+     *                 their delivery geometry on a separate output.
      */
     requestGeometry(opts = {}) {
         this.send({ action: 'get_geometry', ...opts });

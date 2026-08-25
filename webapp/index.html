@@ -150,10 +150,27 @@
             </div>
         </div>
 
+        <!-- Export dialog — only shown for HDAs with more than one output -->
+        <div id="exportModal" class="modal-overlay hidden">
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+                <h3 id="exportModalTitle">Export Geometry</h3>
+                <p class="modal-help">
+                    This asset has more than one output. The viewport shows output 0;
+                    choose which output to cook and save.
+                </p>
+                <label class="modal-label" for="exportOutputSelect">Output</label>
+                <select class="modal-select" id="exportOutputSelect"></select>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="exportCancelBtn">Cancel</button>
+                    <button class="btn btn-primary" id="exportConfirmBtn">Export</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Geometry Loading Indicator -->
         <div id="geometryLoader" class="geometry-loader" style="display: none;">
             <div class="geometry-loader-spinner"></div>
-            <div class="geometry-loader-text">Houdini is cooking...</div>
+            <div class="geometry-loader-text" id="geometryLoaderText">Houdini is cooking...</div>
         </div>
     </div>
 
