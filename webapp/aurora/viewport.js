@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { ViewportGizmo } from 'https://cdn.jsdelivr.net/gh/taucad/three-viewport-gizmo/dist/three-viewport-gizmo.js';
+import { ViewportGizmo } from 'https://cdn.jsdelivr.net/npm/three-viewport-gizmo@1.0.7/dist/three-viewport-gizmo.js';
 
 const HDRI_URL = 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/flamingo_pan_1k.hdr';
 const BG_COLOR = 0x1a1a2e;

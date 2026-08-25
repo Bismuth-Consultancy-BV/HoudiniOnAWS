@@ -1,7 +1,7 @@
 {
-    "houdini_major": 21,
+    "houdini_major": 22,
     "houdini_minor": 0,
-    "houdini_build": 559,
+    "houdini_build": 368,
     "python_version": "3.11",
     "eula_date": "2021-10-13"
 }

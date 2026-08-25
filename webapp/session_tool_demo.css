@@ -97,6 +97,19 @@ body {
     min-height: 20px;
 }
 
+/* Startup failures carry a real explanation (no license, boot timeout),
+   so give them room to breathe instead of one cramped red line. */
+.upload-error.visible {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid #f5b5b5;
+    border-left: 4px solid #c53030;
+    border-radius: 6px;
+    background: #fdf0f0;
+    text-align: left;
+    line-height: 1.45;
+}
+
 .btn {
     width: 100%;
     padding: 12px 20px;
@@ -583,6 +596,47 @@ body {
     font-size: 0.8em;
     padding: 0 12px;
     white-space: nowrap;
+}
+
+/* Which Houdini the server is actually running. */
+.menu-houdini-version {
+    color: #64748b;
+    font-size: 0.8em;
+    padding: 0 12px;
+    white-space: nowrap;
+}
+
+.menu-houdini-version:empty {
+    display: none;
+}
+
+/* Shown when a loaded asset does not match the server's Houdini build. */
+.compat-warning {
+    margin: 12px;
+    padding: 12px 14px;
+    border: 1px solid #f0c674;
+    border-left: 4px solid #d19a19;
+    border-radius: 6px;
+    background: #fdf6e3;
+    color: #6b5310;
+    font-size: 0.85em;
+    line-height: 1.45;
+}
+
+.compat-warning.hidden {
+    display: none;
+}
+
+.compat-warning ul {
+    margin: 8px 0 0 18px;
+    padding: 0;
+}
+
+.compat-warning li {
+    margin: 2px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.92em;
+    word-break: break-word;
 }
 
 /* Empty state in sidebar */

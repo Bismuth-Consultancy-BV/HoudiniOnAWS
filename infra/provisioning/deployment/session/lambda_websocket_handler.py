@@ -124,7 +124,7 @@ def connect_handler(event, context):
 
     except ClientError as e:
         logger.error(f"Error creating session: {e}")
-        return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+        return {"statusCode": 500, "body": json.dumps({"action": "error", "error": str(e)})}
 
 
 def disconnect_handler(event, context):
@@ -234,7 +234,7 @@ def message_handler(event, context):
             response = table.get_item(Key={"session_id": session_id_in_body})
             if "Item" not in response:
                 send_to_connection(
-                    apigw_mgmt, connection_id, {"error": "Session not found"}
+                    apigw_mgmt, connection_id, {"action": "error", "error": "Session not found"}
                 )
                 return {"statusCode": 404, "body": "Session not found"}
             session = response["Item"]
@@ -248,7 +248,7 @@ def message_handler(event, context):
 
             if not response["Items"]:
                 send_to_connection(
-                    apigw_mgmt, connection_id, {"error": "Session not found"}
+                    apigw_mgmt, connection_id, {"action": "error", "error": "Session not found"}
                 )
                 return {"statusCode": 404, "body": "Session not found"}
 
@@ -289,7 +289,7 @@ def message_handler(event, context):
                 logger.info(f"Routed message from browser to EC2")
             else:
                 send_to_connection(
-                    apigw_mgmt, connection_id, {"error": "EC2 not connected yet"}
+                    apigw_mgmt, connection_id, {"action": "error", "error": "EC2 not connected yet"}
                 )
 
         elif connection_id == ec2_conn:
@@ -305,7 +305,7 @@ def message_handler(event, context):
     except Exception as e:
         logger.error(f"Error processing message: {e}")
         try:
-            send_to_connection(apigw_mgmt, connection_id, {"error": str(e)})
+            send_to_connection(apigw_mgmt, connection_id, {"action": "error", "error": str(e)})
         except:
             pass
         return {"statusCode": 500, "body": str(e)}
@@ -319,7 +319,7 @@ def handle_request_upload_url(session, body, apigw_mgmt, connection_id):
 
     if not INPUT_BUCKET:
         send_to_connection(
-            apigw_mgmt, connection_id, {"error": "S3 bucket not configured"}
+            apigw_mgmt, connection_id, {"action": "error", "error": "S3 bucket not configured"}
         )
         return {"statusCode": 500, "body": "S3 bucket not configured"}
 
@@ -494,14 +494,25 @@ def handle_terminate_session(session, apigw_mgmt, connection_id):
 
 
 def send_to_connection(apigw_mgmt, connection_id, data):
-    """Send data to WebSocket connection."""
+    """Send data to a WebSocket connection.
+
+    Returns True if the message was delivered, False otherwise. Delivery
+    failures are deliberately not raised: the caller's error path replies to
+    the *sender*, so a throttled or dead recipient would produce another
+    outbound message, throttle again, and loop. Dropping is the correct
+    response to backpressure.
+    """
     try:
         apigw_mgmt.post_to_connection(
             ConnectionId=connection_id, Data=json.dumps(data).encode("utf-8")
         )
+        return True
     except ClientError as e:
-        if e.response["Error"]["Code"] == "GoneException":
-            logger.warning(f"Connection {connection_id} is gone")
+        code = e.response["Error"]["Code"]
+        if code == "GoneException":
+            logger.warning(f"Connection {connection_id} is gone; dropping message")
+        elif code == "TooManyRequestsException":
+            logger.warning(f"Throttled sending to {connection_id}; dropping message")
         else:
             logger.error(f"Error sending to connection {connection_id}: {e}")
-        raise
+        return False

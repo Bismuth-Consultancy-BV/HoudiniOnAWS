@@ -45,21 +45,7 @@ log_step "AURORA SESSION STARTING"
 log_step "=========================================="
 
 # ============================================================
-# OPTIMIZATION: Launch hython IMMEDIATELY to start its ~90s cold boot
-# in parallel with metadata retrieval, S3 download, and licensing.
-# The runner script polls for a ready-signal file before loading the HIP.
-# ============================================================
-export HYTHON_READY_SIGNAL="/tmp/houdini_boot_ready"
-rm -f "$HYTHON_READY_SIGNAL"
-
-log_step "EARLY LAUNCH: Starting hython cold boot NOW (runs in parallel with init)..."
-cd "${AURORA_TOOLING_ROOT:-/opt/aurora}"
-/opt/houdini/bin/hython "$AURORA_TOOLING_ROOT/runtime/session/houdini_runner.py" &
-HOUDINI_RUNNER_PID=$!
-log_step "hython launched (PID: $HOUDINI_RUNNER_PID) — warming up while we do licensing + downloads"
-
-# ============================================================
-# While hython is cold-starting (~90s), do ALL other init work
+# Instance metadata first: licensing below needs AWS_REGION.
 # ============================================================
 log_step "Retrieving instance metadata..."
 INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
@@ -67,6 +53,84 @@ AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 
 log_step "Instance ID: $INSTANCE_ID"
 log_step "AWS Region: $AWS_REGION"
+
+########################### HOUDINI LICENSING #####################
+log_step "Configuring Houdini licensing..."
+# Retrieve the secret from AWS Secrets Manager
+export SIDEFX_API_SECRET=$(aws secretsmanager get-secret-value --secret-id SideFXOAuthCredentials --region "$AWS_REGION" --query 'SecretString' --output text)
+export CLIENT_ID=$(echo "$SIDEFX_API_SECRET" | jq -r .sidefx_client)
+export CLIENT_SECRET=$(echo "$SIDEFX_API_SECRET" | jq -r .sidefx_secret)
+
+# Houdini Licensing
+#
+# Houdini 22 takes API credentials from hserver.ini, where the key line names
+# the license server alongside the credentials:
+#
+#   APIKey=<servername> <client id> <client secret>
+#
+# Under 21 it was enough to pass --clientid/--clientsecret with a separate
+# --host and then run `sesictrl login`. Under 22 that leaves hserver
+# unauthenticated - it exits silently, `sesictrl login` finds no session
+# ("You are not logged into the license server. [Error L01]") and falls back
+# to prompting for an email address, which never terminates on a headless
+# instance. So configure the ini and do not call `sesictrl login` at all.
+LICENSE_SERVER="https://www.sidefx.com/license/sesinetd"
+
+# hserver reads /usr/lib/sesi/hserver/hserver.ini when run as a service and
+# $HOME/.local/share/sidefx/hserver.ini otherwise. We run it as ubuntu, so only
+# the per-user file applies. Writing the service path as root left a 0600
+# root-owned file that hserver could not read, and it reported
+# "Invalid options given" on every boot.
+HSERVER_INI="$HOME/.local/share/sidefx/hserver.ini"
+
+log_step "Writing hserver API key configuration..."
+mkdir -p "$(dirname "$HSERVER_INI")"
+printf 'APIKey=%s %s %s\n' "$LICENSE_SERVER" "$CLIENT_ID" "$CLIENT_SECRET" > "$HSERVER_INI"
+chmod 600 "$HSERVER_INI"
+log_step "hserver.ini written ($HSERVER_INI)"
+
+log_step "Starting Houdini license server..."
+/opt/houdini/bin/hserver -q
+/opt/houdini/bin/hserver --clientid "$CLIENT_ID" --clientsecret "$CLIENT_SECRET"
+log_step "Houdini licensing configured (hserver started with API keys)"
+
+# Licensing diagnostics, off by default. Set AURORA_LICENSE_DEBUG=1 in
+# /etc/environment (or in the launch template's user_data, which runs before
+# this script) to print hserver's status and the account's license inventory -
+# useful when a session cannot check out a license. Instance tags are not read
+# until later in this script, so they cannot gate this. Both calls are read-only and take their credentials as arguments
+# so neither can fall back to the interactive prompt; stdin is closed and
+# output capped so a command that prompts anyway cannot flood the log.
+if [ "${AURORA_LICENSE_DEBUG:-0}" = "1" ]; then
+    log_step "--- hserver status ---"
+    timeout 30 /opt/houdini/bin/hserver -l < /dev/null 2>&1 | head -c 4000 || true
+    log_step "--- available licenses ---"
+    timeout 30 /opt/houdini/houdini/sbin/sesictrl print-license \
+        --client-id "$CLIENT_ID" --client-secret "$CLIENT_SECRET" \
+        < /dev/null 2>&1 | head -c 4000 || true
+    log_step "--- end license diagnostics ---"
+fi
+
+# ============================================================
+# Launch hython only AFTER licensing is configured. houdini_runner.py
+# does `import hou` at module scope, which acquires a license at
+# interpreter startup - long before it polls the ready-signal file.
+# Starting it earlier races `hserver -q` above and dies with
+# "No licenses could be found to run this application" (exit 3).
+# Its ~90s cold boot still overlaps the remaining init below.
+# ============================================================
+export HYTHON_READY_SIGNAL="/tmp/houdini_boot_ready"
+# Tee hython's output so we can tell the browser *why* it died if it never
+# connects. websocket_handler.py watches AURORA_STARTUP_ERROR_FILE.
+export HYTHON_LOG="/tmp/hython_startup.log"
+export AURORA_STARTUP_ERROR_FILE="/tmp/aurora_startup_error"
+rm -f "$HYTHON_READY_SIGNAL" "$HYTHON_LOG" "$AURORA_STARTUP_ERROR_FILE"
+
+log_step "Starting hython cold boot (license is ready; runs in parallel with remaining init)..."
+cd "${AURORA_TOOLING_ROOT:-/opt/aurora}"
+/opt/houdini/bin/hython "$AURORA_TOOLING_ROOT/runtime/session/houdini_runner.py" > >(tee -a "$HYTHON_LOG") 2>&1 &
+HOUDINI_RUNNER_PID=$!
+log_step "hython launched (PID: $HOUDINI_RUNNER_PID) — warming up while we finish init"
 
 # Retrieve all tags associated with this instance
 log_step "Retrieving instance tags..."
@@ -148,24 +212,6 @@ export LOCAL_WS_PORT="7007"
 log_step "API Endpoint: $API_ENDPOINT"
 log_step "Local WebSocket Port: $LOCAL_WS_PORT"
 
-########################### HOUDINI LICENSING #####################
-log_step "Configuring Houdini licensing..."
-# Retrieve the secret from AWS Secrets Manager
-export SIDEFX_API_SECRET=$(aws secretsmanager get-secret-value --secret-id SideFXOAuthCredentials --region "$AWS_REGION" --query 'SecretString' --output text)
-export CLIENT_ID=$(echo "$SIDEFX_API_SECRET" | jq -r .sidefx_client)
-export CLIENT_SECRET=$(echo "$SIDEFX_API_SECRET" | jq -r .sidefx_secret)
-
-# Houdini Licensing
-log_step "Starting Houdini license server..."
-/opt/houdini/bin/hserver -q
-/opt/houdini/bin/hserver --clientid "$CLIENT_ID" --clientsecret "$CLIENT_SECRET" --host "https://www.sidefx.com/license/sesinetd"
-log_step "Authenticating with SideFX..."
-/opt/houdini/houdini/sbin/sesictrl login
-# log_step "License information:"
-# /opt/houdini/houdini/sbin/sesictrl print-license
-# /opt/houdini/houdini/sbin/sesictrl dg
-log_step "Houdini licensing configured successfully"
-
 INIT_TIME=$(($(date +%s) - START_TIME))
 log_step "Initialization completed in ${INIT_TIME}s (hython warming up in background since boot)"
 
@@ -207,7 +253,15 @@ cd "$AURORA_TOOLING_ROOT"
 # Set SSL_CERT_FILE so the bundled Python can verify TLS certificates (API Gateway WSS).
 export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
 echo "Starting WebSocket handler..."
-/opt/houdini/python/bin/python3.11 "$AURORA_TOOLING_ROOT/runtime/session/websocket_handler.py" &
+# Houdini's bundled Python version changes between releases, so resolve the
+# interpreter rather than hard-coding a minor version.
+HOUDINI_PYTHON=$(ls /opt/houdini/python/bin/python3.* 2>/dev/null \
+  | grep -E '/python3\.[0-9]+$' | sort -V | tail -n1)
+if [ -z "$HOUDINI_PYTHON" ]; then
+    echo "ERROR: no python3.x interpreter under /opt/houdini/python/bin"
+    exit 1
+fi
+"$HOUDINI_PYTHON" "$AURORA_TOOLING_ROOT/runtime/session/websocket_handler.py" &
 WS_HANDLER_PID=$!
 echo "WebSocket handler PID: $WS_HANDLER_PID"
 
@@ -221,6 +275,22 @@ EXIT_CODE=$?
 
 echo "=========================================="
 echo "One process ended with exit code: $EXIT_CODE"
+
+# If hython is the one that died, work out why and hand the reason to the
+# WebSocket handler so the browser gets a warning instead of hanging forever.
+# The handler polls AURORA_STARTUP_ERROR_FILE, so give it a moment to send
+# before we tear the instance down.
+if ! kill -0 "$HOUDINI_RUNNER_PID" 2>/dev/null; then
+    STARTUP_REASON="Houdini failed to start on the session instance (exit code $EXIT_CODE). See CloudWatch /aws/ec2/aurora-session for the full log."
+    if grep -qi "No licenses could be found" "$HYTHON_LOG" 2>/dev/null; then
+        STARTUP_REASON="No Houdini license available. The instance signed in to SideFX successfully, but no Houdini Engine license could be checked out. Check your available licenses at sidefx.com."
+    fi
+    log_step "Runner failed before becoming ready: $STARTUP_REASON"
+    echo "$STARTUP_REASON" > "$AURORA_STARTUP_ERROR_FILE"
+    log_step "Giving the WebSocket handler a moment to warn the browser..."
+    sleep 8
+fi
+
 echo "Terminating remaining processes..."
 
 # Kill both processes

@@ -29,7 +29,7 @@
     </div>
 
     <!-- Hidden file input for HDA loading via menu -->
-    <input type="file" id="hdaFileInput" accept=".hda" style="display: none;">
+    <input type="file" id="hdaFileInput" accept=".hda,.hdalc,.hdanc,.otl,.otllc,.otlnc" style="display: none;">
 
     <!-- Main Application Container -->
     <div id="appContainer" class="container hidden">
@@ -58,6 +58,7 @@
             </div>
             <div class="menu-spacer"></div>
             <div class="menu-hda-name" id="menuHdaName"></div>
+            <div class="menu-houdini-version" id="menuHoudiniVersion"></div>
             <div class="menu-status" id="menuStatus">Disconnected</div>
         </div>
 
@@ -112,6 +113,7 @@
                         <small>Use <strong>Session → Load HDA</strong> to get started</small>
                     </div>
                 </div>
+                <div class="compat-warning hidden" id="compatWarning"></div>
                 <div class="section" id="parametersSection" style="display: none;">
                     <h3>Parameters</h3>
                     <div id="parametersContainer"></div>

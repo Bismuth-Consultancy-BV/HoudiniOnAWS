@@ -45,6 +45,12 @@ variable "sidefx_oauth_credentials_name" {
   type        = string
 }
 
+variable "github_credentials_name" {
+  description = "The name of the AWS Secrets Manager secret containing the GitHub PAT used to pull the tooling repo at boot"
+  type        = string
+  default     = "GithubCredentials"
+}
+
 variable "vulkan_version" {
   description = "The version of Vulkan to install"
   type        = string
@@ -435,6 +441,8 @@ data "aws_iam_policy_document" "secrets_manager_access" {
     actions = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
     resources = [
       "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.sidefx_oauth_credentials_name}-*",
+      # user_data pulls the tooling repo at boot using this PAT.
+      "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.github_credentials_name}-*",
     ]
     effect = "Allow"
   }
@@ -458,7 +466,7 @@ resource "aws_iam_policy" "cloudwatch_logs_policy" {
         ],
         Resource = [
           "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/aurora-jobs:*",
-          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/houdini-interactive:*"
+          "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/aurora-session:*"
         ]
       }
     ]

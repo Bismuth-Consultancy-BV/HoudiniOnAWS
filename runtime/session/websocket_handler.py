@@ -31,6 +31,11 @@ class WebSocketBridge:
         self.houdini_clients: Set[websockets.WebSocketServerProtocol] = set()
         self.running = True
         self.ready = False
+        # entrypoint.sh writes the reason here if the Houdini runner dies
+        # before it ever connects (most commonly: no license available).
+        self.startup_error_file = os.getenv(
+            "AURORA_STARTUP_ERROR_FILE", "/tmp/aurora_startup_error"
+        )
 
         logger.info(f"Initializing WebSocket bridge for session {session_id}")
         logger.info(f"API Gateway URL: {websocket_url}")
@@ -134,6 +139,41 @@ class WebSocketBridge:
             self.houdini_clients.discard(websocket)
             self.ready = False
 
+    async def watch_for_startup_failure(self, poll_interval: float = 1.0):
+        """
+        Warn the browser if the Houdini runner dies before connecting.
+
+        houdini_runner.py does `import hou` at module scope, which checks out
+        a Houdini license at interpreter startup. With no license available
+        the interpreter exits before it ever reaches our local server, and
+        the browser would otherwise sit on "loading" forever. entrypoint.sh
+        classifies the failure and writes it to startup_error_file; we relay
+        it as a normal {"error": ...} message, which the web client already
+        surfaces to the user.
+        """
+        logger.info(
+            f"Watching for startup failures at {self.startup_error_file}"
+        )
+        while not self.ready:
+            if os.path.exists(self.startup_error_file):
+                try:
+                    with open(self.startup_error_file) as f:
+                        reason = f.read().strip()
+                except OSError as e:
+                    logger.error(f"Could not read startup error file: {e}")
+                    reason = ""
+
+                reason = reason or "Houdini failed to start on the session instance."
+                logger.error(f"Runner startup failed: {reason}")
+                await self.send_to_browser(
+                    {"status": "error", "error": reason, "fatal": True}
+                )
+                logger.info("Startup failure reported to browser")
+                return
+            await asyncio.sleep(poll_interval)
+
+        logger.info("Houdini runner connected; startup watcher standing down")
+
     async def start_local_server(self):
         """Start local WebSocket server for Houdini runner."""
         logger.info(f"=== STARTING LOCAL WEBSOCKET SERVER ===")
@@ -230,7 +270,9 @@ class WebSocketBridge:
         # Start local server and browser forwarder concurrently
         try:
             await asyncio.gather(
-                self.start_local_server(), self.forward_browser_to_houdini()
+                self.start_local_server(),
+                self.forward_browser_to_houdini(),
+                self.watch_for_startup_failure(),
             )
         except Exception as e:
             logger.error(f"Error in bridge: {e}")

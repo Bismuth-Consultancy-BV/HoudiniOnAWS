@@ -59,6 +59,10 @@ class HoudiniRunner:
         self.websocket = websocket
         self.log_sink = None
         self._log_queue = []
+        self._dropped_logs = 0
+        # Set while installing an HDA - see _note_compatibility_warning().
+        self._compat_warning_count = 0
+        self._compat_samples = []
 
         logger.info(f"Initializing Houdini runner for session {session_id}")
         logger.info(f"Session HIP: {session_hip}")
@@ -125,6 +129,7 @@ class HoudiniRunner:
                 elif severity == hou.severityType.Warning:
                     level = "warning"
                     logger.warning(f"[Houdini WARNING] {context}: {message}")
+                    self._note_compatibility_warning(context, message)
                 elif severity == hou.severityType.Message:
                     level = "info"
                     logger.info(f"[Houdini INFO] {context}: {message}")
@@ -154,8 +159,32 @@ class HoudiniRunner:
         except Exception as e:
             logger.error(f"Failed to setup Houdini log capturing: {e}")
 
+    #: Houdini diagnostics that mean the asset expects a different build.
+    _COMPAT_MARKERS = (
+        "incomplete asset definition",
+        "Skipping unrecognized parameter",
+    )
+
+    #: Upper bound on queued log messages. Installing an asset built for a
+    #: different Houdini can emit thousands of warnings; forwarding them all
+    #: throttles API Gateway, and the errors that come back turn into more
+    #: traffic. Drop the overflow and report the count instead.
+    MAX_QUEUED_LOGS = 200
+
+    def _note_compatibility_warning(self, context: str, message: str) -> None:
+        """Record a warning that indicates a Houdini version mismatch."""
+        if not any(marker in message for marker in self._COMPAT_MARKERS):
+            return
+        self._compat_warning_count += 1
+        if len(self._compat_samples) < 5:
+            self._compat_samples.append(f"{context}: {message}")
+
     def send_log_to_client(self, level: str, message: str, context: str = ""):
-        """Send a log message to the client via WebSocket."""
+        """Queue a log message for the client, dropping runaway overflow."""
+        if len(self._log_queue) >= self.MAX_QUEUED_LOGS:
+            self._dropped_logs += 1
+            return
+
         self._log_queue.append(
             {
                 "action": "log",
@@ -170,11 +199,35 @@ class HoudiniRunner:
         """Get and clear pending logs for sending."""
         logs = self._log_queue.copy()
         self._log_queue.clear()
+
+        if self._dropped_logs:
+            logs.append(
+                {
+                    "action": "log",
+                    "level": "warning",
+                    "message": (
+                        f"{self._dropped_logs} further log messages were "
+                        f"suppressed to avoid flooding the session."
+                    ),
+                    "context": "Session",
+                    "timestamp": time.time(),
+                }
+            )
+            self._dropped_logs = 0
+
         return logs
 
     def process_command(self, command: dict) -> dict:
         """Process a command synchronously and return result."""
         action = command.get("action")
+
+        if not action:
+            # Not a command. The API Gateway lambda routes its error
+            # notifications back to the sender, so these arrive here when the
+            # browser connection is throttled or gone. Replying would emit
+            # another message, throttle again, and loop - so stay silent.
+            logger.debug("Ignoring message with no action: %s", command)
+            return None
 
         logger.info(f"Processing command: {action}")
 
@@ -193,7 +246,7 @@ class HoudiniRunner:
                 return {"status": "terminating"}
             else:
                 logger.warning(f"Unknown action: {action}")
-                return {"status": "received", "action": action}
+                return None
 
         except Exception as e:
             logger.error(f"Error processing command: {e}")
@@ -230,6 +283,8 @@ class HoudiniRunner:
             logger.info(f"HDA downloaded in {download_time:.2f}s")
 
             # Install and instantiate the HDA (replaces previous one if any)
+            self._compat_warning_count = 0
+            self._compat_samples = []
             hda_start = time.time()
             self.hda_node = install_and_instantiate_hda(local_hda_path)
             hda_time = time.time() - hda_start
@@ -247,12 +302,30 @@ class HoudiniRunner:
             )
             logger.info(msg)
 
-            return {
+            result = {
                 "action": "parameters_ready",
                 "parameters": param_data,
                 "node_count": node_count,
                 "message": msg,
+                "houdini_version": hou.applicationVersionString(),
             }
+
+            if self._compat_warning_count:
+                result["compatibility_warning"] = {
+                    "houdini_version": hou.applicationVersionString(),
+                    "count": self._compat_warning_count,
+                    "samples": self._compat_samples,
+                    "message": (
+                        f"'{filename}' does not fully match the Houdini "
+                        f"{hou.applicationVersionString()} running on this "
+                        f"server: {self._compat_warning_count} definition or "
+                        f"parameter mismatches were reported. The asset was "
+                        f"most likely authored in a newer build, and may not "
+                        f"cook as intended here."
+                    ),
+                }
+
+            return result
 
         except Exception as e:
             logger.error(f"Error extracting HDA parameters: {e}")
@@ -625,6 +698,17 @@ class RunnerClient:
                     logger.info("=" * 60)
 
                     self._runner.websocket = ws
+
+                    # Tell the client which Houdini it is actually talking to.
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "action": "session_info",
+                                "houdini_version": hou.applicationVersionString(),
+                            }
+                        )
+                    )
+
                     await self._message_loop(ws)
                     return  # clean exit
 
@@ -664,7 +748,8 @@ class RunnerClient:
 
                     command = json.loads(message)
                     action = command.get("action")
-                    logger.info(f"Received command: {action}")
+                    if action:
+                        logger.info(f"Received command: {action}")
 
                     # Run blocking work in a thread to keep WS pings alive
                     loop = asyncio.get_event_loop()
@@ -672,8 +757,9 @@ class RunnerClient:
                         executor, self._runner.process_command, command
                     )
 
-                    await ws.send(json.dumps(result))
-                    logger.info(f"Sent response for {action}")
+                    if result is not None:
+                        await ws.send(json.dumps(result))
+                        logger.info(f"Sent response for {action}")
 
                     # Auto-export initial geometry after parameter extraction
                     if (
@@ -726,12 +812,28 @@ class RunnerClient:
                 break
 
     async def _flush_logs(self, ws) -> None:
-        """Forward any queued Houdini log messages to the handler."""
-        for log_msg in self._runner.get_pending_logs():
-            try:
-                await ws.send(json.dumps(log_msg))
-            except Exception as e:
-                logger.error(f"Error sending log: {e}")
+        """Forward queued Houdini log messages as one batched message.
+
+        Sending each entry separately meant a chatty asset could emit
+        thousands of WebSocket messages in seconds, which throttles API
+        Gateway and degrades the whole session.
+        """
+        logs = self._runner.get_pending_logs()
+        if not logs:
+            return
+
+        try:
+            await ws.send(
+                json.dumps(
+                    {
+                        "action": "log_batch",
+                        "logs": logs,
+                        "timestamp": time.time(),
+                    }
+                )
+            )
+        except Exception as e:
+            logger.error(f"Error sending logs: {e}")
 
 
 # ======================================================================

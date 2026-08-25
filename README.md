@@ -288,7 +288,7 @@ Serve the webapp locally and open it in a browser:
 ```bash
 cd webapp
 python -m http.server 8000
-# Visit http://localhost:8000/session_tool_demo.html
+# Visit http://localhost:8000/
 ```
 
 The workflow is:
@@ -431,7 +431,7 @@ You will also need to log into the [AWS console](https://aws.amazon.com/console/
 
 - Web application (Session mode frontend)
   - [webapp/config.js](webapp/config.js) - WebSocket URL and session timeout configuration.
-  - [webapp/session_tool_demo.html](webapp/session_tool_demo.html) - Interactive session UI with 3D viewer, parameter controls, and file upload.
+  - [webapp/index.html](webapp/index.html) - Interactive session UI with 3D viewer, parameter controls, and file upload. Markup and bootstrap only; all behaviour lives in [webapp/aurora/app.js](webapp/aurora/app.js).
   - [webapp/aurora/](webapp/aurora/) - Modular JS for viewport, parameters, session management, and events.
 
 - Keys and infra assets

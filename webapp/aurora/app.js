@@ -35,6 +35,18 @@ import { AuroraViewport } from './viewport.js';
 import { AuroraParameters } from './parameters.js';
 
 export class AuroraApp extends EventEmitter {
+    /** How long to wait for a session to become ready before warning. */
+    static STARTUP_TIMEOUT_MS = 5 * 60 * 1000;
+
+    /**
+     * Digital-asset extensions accepted by the loader. Houdini varies the
+     * suffix by license tier - lc = Limited Commercial (Indie), nc =
+     * Non-Commercial (Apprentice) - and otl is the pre-H12 spelling. The
+     * backend installs whatever it is handed, so the file picker should not
+     * be narrower than hou.hda.installFile().
+     */
+    static HDA_EXTENSIONS = ['.hda', '.hdalc', '.hdanc', '.otl', '.otllc', '.otlnc'];
+
     /**
      * @param {object} config
      * @param {string} config.websocket_url           WebSocket endpoint (wss://…)
@@ -62,6 +74,8 @@ export class AuroraApp extends EventEmitter {
         this._currentGeometryUrl = null;
         this._pendingSave = false;
         this._pendingNewHDA = false;
+        this._startupWatchdog = null;
+        this._sessionEverReady = false;
 
         // DOM references (populated by mount())
         this._el = {};
@@ -121,6 +135,8 @@ export class AuroraApp extends EventEmitter {
             menuBar:             $('menuBar'),
             menuStatus:          $('menuStatus'),
             menuHdaName:         $('menuHdaName'),
+            menuHoudiniVersion:  $('menuHoudiniVersion'),
+            compatWarning:       $('compatWarning'),
             menuLoadHDABtn:      $('menuLoadHDABtn'),
             menuTerminateBtn:    $('menuTerminateBtn'),
             menuExportBtn:       $('menuExportBtn'),
@@ -179,6 +195,7 @@ export class AuroraApp extends EventEmitter {
 
             this._updateLoadingMessage('Starting EC2 instance...');
             this._setStatus('Starting...');
+            this._startStartupWatchdog();
         } catch (error) {
             console.error('[AuroraApp] Failed to start session:', error);
             this._el.uploadError.textContent = 'Failed to connect. Please try again.';
@@ -201,13 +218,16 @@ export class AuroraApp extends EventEmitter {
     }
 
     /**
-     * Upload and load a new HDA file into the active session.
-     * @param {File} file — a .hda file
+     * Upload and load a new digital asset into the active session.
+     * @param {File} file — a Houdini digital asset (see AuroraApp.HDA_EXTENSIONS)
      */
     async loadHDA(file) {
         if (!file) return;
-        if (!file.name.endsWith('.hda')) {
-            alert('Invalid file type. Please use a .hda (Houdini Digital Asset) file.');
+        this._hideCompatWarning();
+        const name = file.name.toLowerCase();
+        if (!AuroraApp.HDA_EXTENSIONS.some(ext => name.endsWith(ext))) {
+            alert('Invalid file type. Please use a Houdini digital asset ('
+                + AuroraApp.HDA_EXTENSIONS.join(', ') + ').');
             return;
         }
 
@@ -243,9 +263,14 @@ export class AuroraApp extends EventEmitter {
 
     /** @private */
     _showLanding() {
+        this._hideCompatWarning();
+        this._setHoudiniVersion('');
         this._el.landing?.classList.remove('hidden');
         this._el.app?.classList.add('hidden');
-        if (this._el.uploadError) this._el.uploadError.textContent = '';
+        if (this._el.uploadError) {
+            this._el.uploadError.textContent = '';
+            this._el.uploadError.classList.remove('visible');
+        }
         if (this._el.initializeBtn) this._el.initializeBtn.disabled = false;
         this._setStatus('Disconnected');
         this._setHdaName('');
@@ -276,6 +301,7 @@ export class AuroraApp extends EventEmitter {
 
     /** @private */
     _showSessionReady() {
+        this._sessionEverReady = true;
         this._showSection('empty');
         this._setStatus('Session Active');
         this._setMenuEnabled('load', true);
@@ -310,9 +336,115 @@ export class AuroraApp extends EventEmitter {
         });
     }
 
+    /**
+     * @private
+     * Backstop for a session that never becomes ready.
+     *
+     * The instance normally reports its own startup failures (see
+     * websocket_handler.watch_for_startup_failure), but if it dies without
+     * saying so — or never boots at all — the browser would otherwise sit on
+     * the loading screen indefinitely. Warn the user instead.
+     */
+    _startStartupWatchdog() {
+        this._clearStartupWatchdog();
+        this._sessionEverReady = false;
+        this._startupWatchdog = setTimeout(() => {
+            this._startupWatchdog = null;
+            if (this._sessionEverReady) return;
+            this._showSessionFailure(
+                `The session did not start within ${Math.round(AuroraApp.STARTUP_TIMEOUT_MS / 60000)} minutes. ` +
+                'The instance may have failed to boot, or Houdini could not acquire a license. ' +
+                'Check the /aws/ec2/aurora-session CloudWatch log group for details.'
+            );
+        }, AuroraApp.STARTUP_TIMEOUT_MS);
+    }
+
+    /** @private */
+    _clearStartupWatchdog() {
+        if (this._startupWatchdog) {
+            clearTimeout(this._startupWatchdog);
+            this._startupWatchdog = null;
+        }
+    }
+
+    /**
+     * @private
+     * Abandon the session and return the user to the landing screen,
+     * showing why. Used both for a session that never came up and for one
+     * that dies after it was running.
+     * @param {string} reason — human-readable explanation.
+     */
+    _showSessionFailure(reason) {
+        this._clearStartupWatchdog();
+        const message = reason || 'The Houdini session failed to start.';
+
+        console.error('[AuroraApp] Session startup failed:', message);
+        this._addLog('error', message, 'Session');
+
+        this._teardownModules();
+        this._showLanding();
+
+        if (this._el.uploadError) {
+            this._el.uploadError.textContent = message;
+            this._el.uploadError.classList.add('visible');
+        }
+        if (this._el.initializeBtn) this._el.initializeBtn.disabled = false;
+        this._setStatus('Session failed');
+    }
+
     /** @private */
     _setStatus(text) {
         if (this._el.menuStatus) this._el.menuStatus.textContent = text;
+    }
+
+    /** @private Display which Houdini build the session instance runs. */
+    _setHoudiniVersion(version) {
+        if (!this._el.menuHoudiniVersion) return;
+        this._el.menuHoudiniVersion.textContent = version ? `Houdini ${version}` : '';
+        this._el.menuHoudiniVersion.title = version
+            ? `The session instance is running Houdini ${version}`
+            : '';
+    }
+
+    /**
+     * @private
+     * Warn that the loaded asset does not match the server's Houdini build.
+     *
+     * Houdini reports this as "incomplete asset definition" and "skipping
+     * unrecognized parameter" warnings while installing. The asset still
+     * loads, but may not cook as its author intended, so say so rather than
+     * letting the user wonder why the result looks wrong.
+     */
+    _showCompatWarning(warning) {
+        const el = this._el.compatWarning;
+        if (!el || !warning) return;
+
+        el.textContent = '';
+
+        const text = document.createElement('div');
+        text.textContent = warning.message
+            || 'This asset does not match the Houdini version on the server.';
+        el.appendChild(text);
+
+        if (Array.isArray(warning.samples) && warning.samples.length) {
+            const list = document.createElement('ul');
+            for (const sample of warning.samples) {
+                const li = document.createElement('li');
+                li.textContent = sample;
+                list.appendChild(li);
+            }
+            el.appendChild(list);
+        }
+
+        el.classList.remove('hidden');
+        this._addLog('warning', warning.message || 'Asset/Houdini version mismatch', 'Session');
+    }
+
+    /** @private */
+    _hideCompatWarning() {
+        if (!this._el.compatWarning) return;
+        this._el.compatWarning.textContent = '';
+        this._el.compatWarning.classList.add('hidden');
     }
 
     /** @private */
@@ -516,12 +648,25 @@ export class AuroraApp extends EventEmitter {
         });
 
         s.on('session_ready', () => {
+            this._clearStartupWatchdog();
             this._addLog('system', 'Houdini session ready', 'Client');
             this._showSessionReady();
             this._emit('session:ready');
         });
 
+        s.on('session_info', (info) => {
+            if (info.houdini_version) {
+                this._setHoudiniVersion(info.houdini_version);
+                this._addLog('system', `Server running Houdini ${info.houdini_version}`, 'Session');
+            }
+        });
+
+        s.on('compatibility_warning', (warning) => {
+            this._showCompatWarning(warning);
+        });
+
         s.on('parameters_ready', (data) => {
+            if (data.houdini_version) this._setHoudiniVersion(data.houdini_version);
             const paramCount = Object.keys(data.parameters?.parameters || {}).length;
             this._addLog('info',
                 `Parameters extracted from HDA (${paramCount} params, ${data.node_count} nodes)`,
@@ -597,8 +742,22 @@ export class AuroraApp extends EventEmitter {
             this._addLog(level, message, context);
         });
 
+        s.on('fatal_error', (err) => {
+            this._hideGeometryLoader();
+            this._showSessionFailure(err);
+        });
+
         s.on('error', (err) => {
             this._hideGeometryLoader();
+
+            // A failure before the session ever came up is fatal: the
+            // instance is gone (or going). Return to the landing screen with
+            // the reason rather than pretending the session is usable.
+            if (!this._sessionEverReady) {
+                this._showSessionFailure(err);
+                return;
+            }
+
             if (!this._el.app?.classList.contains('hidden')) {
                 alert('Error: ' + err);
                 this._showSessionReady();
@@ -615,6 +774,7 @@ export class AuroraApp extends EventEmitter {
 
     /** @private Dispose all sub-modules and reset state. */
     _teardownModules() {
+        this._clearStartupWatchdog();
         if (this._session)  { this._session.dispose();  this._session = null; }
         if (this._viewport) { this._viewport.dispose();  this._viewport = null; }
         if (this._paramUI)  { this._paramUI.dispose();   this._paramUI = null; }

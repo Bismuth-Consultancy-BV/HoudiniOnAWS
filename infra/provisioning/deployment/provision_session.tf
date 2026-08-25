@@ -12,6 +12,16 @@ variable "enable_session_mode" {
   default     = false
 }
 
+# The repository instances pull their tooling from at boot. No https:// prefix:
+# credentials are prefixed at use. This must stay in step with `tooling_repo`
+# in provision_session_ami.pkr.hcl - the AMI's baked clone points wherever it
+# did at build time, and the boot-time fetch below retargets it to this value.
+variable "tooling_repo" {
+  description = "GitHub repository (host/path, no scheme) instances pull the tooling from"
+  type        = string
+  default     = "github.com/Bismuth-Consultancy-BV/HoudiniOnAWS.git"
+}
+
 ############################
 # CloudWatch Log Group
 ############################
@@ -310,9 +320,44 @@ resource "aws_launch_template" "interactive_app" {
     # Fix Git safe.directory issue
     git config --global --add safe.directory $AURORA_TOOLING_ROOT
 
-    # Get latest code from the repository
-    git fetch && git pull
-    
+    # Get latest code from the repository.
+    #
+    # The clone baked into the AMI carries its PAT inside the remote URL,
+    # which (a) breaks the moment that token is rotated and (b) leaks the
+    # token into cloud-init-output.log - and from there into CloudWatch -
+    # whenever git reports an error. Take the current PAT from Secrets
+    # Manager and feed it through GIT_ASKPASS instead, so it never enters
+    # the remote URL, the log, or the on-disk git config.
+    GIT_PAT=$(aws secretsmanager get-secret-value \
+      --secret-id GithubCredentials --region "$AWS_REGION" \
+      --query SecretString --output text | jq -r .PAT)
+
+    if [ -n "$GIT_PAT" ] && [ "$GIT_PAT" != "null" ]; then
+      export GIT_PAT
+      ASKPASS=$(mktemp)
+      printf '#!/bin/sh\necho "$GIT_PAT"\n' > "$ASKPASS"
+      chmod 700 "$ASKPASS"
+
+      # Point at the configured tooling repo. The clone baked into the AMI
+      # may target a different repository, and carries a PAT in its remote
+      # URL, so set the remote explicitly rather than inheriting whatever
+      # Packer left behind.
+      git remote set-url origin "https://x-access-token@${var.tooling_repo}"
+
+      if GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 git fetch --quiet origin main; then
+        git reset --hard origin/main
+        echo "Tooling updated to $(git rev-parse --short HEAD)"
+      else
+        echo "WARNING: git fetch failed; running the code baked into the AMI"
+      fi
+
+      rm -f "$ASKPASS"
+      unset GIT_PAT
+    else
+      echo "WARNING: no GitHub PAT in Secrets Manager; running the code baked into the AMI"
+    fi
+
+
     # Set up the environment for session mode
     chmod +x $AURORA_TOOLING_ROOT/runtime/session/entrypoint.sh
 

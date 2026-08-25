@@ -16,6 +16,7 @@
  *   session.on('status',           text  => { ... });  // human-readable status
  *   session.on('log',              entry => { ... });
  *   session.on('error',            err   => { ... });
+ *   session.on('fatal_error',      err   => { ... });  // session is over
  *   session.on('idle_warning',     data  => { ... });
  *   session.on('idle_timeout',     data  => { ... });
  *   session.on('terminated',       ()    => { ... });
@@ -245,8 +246,15 @@ export class AuroraSession extends EventEmitter {
             this._emit('session_ready');
         }
 
+        if (data.action === 'session_info') {
+            this._emit('session_info', data);
+        }
+
         if (data.action === 'parameters_ready') {
             this._emit('parameters_ready', data);
+            if (data.compatibility_warning) {
+                this._emit('compatibility_warning', data.compatibility_warning);
+            }
         }
 
         if (data.action === 'geometry_ready' && data.geometry) {
@@ -270,8 +278,23 @@ export class AuroraSession extends EventEmitter {
             this._emit('log', { level: data.level, message: data.message, context: data.context });
         }
 
+        // Logs arrive batched - one WebSocket message can carry many entries.
+        if (data.action === 'log_batch' && Array.isArray(data.logs)) {
+            for (const entry of data.logs) {
+                this._emit('log', {
+                    level: entry.level,
+                    message: entry.message,
+                    context: entry.context
+                });
+            }
+        }
+
         if (data.error) {
-            this._emit('error', data.error);
+            // `fatal` means the session cannot continue - the instance is gone
+            // or going (e.g. Houdini never acquired a license). Route it
+            // separately so the app can return to the landing screen rather
+            // than show a dismissable alert over a dead session.
+            this._emit(data.fatal ? 'fatal_error' : 'error', data.error);
         }
 
         // Always emit the raw message for advanced consumers

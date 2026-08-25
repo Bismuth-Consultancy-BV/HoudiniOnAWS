@@ -128,7 +128,15 @@ sudo chown ${USER_NAME}:${USER_NAME} ${HOUDINI_USER_PREF_DIR}
 sudo chmod 700 ${HOUDINI_USER_PREF_DIR}
 echo "export HOUDINI_USER_PREF_DIR=${HOUDINI_USER_PREF_DIR}" | sudo tee -a /etc/environment
 
-/opt/houdini/python/bin/python3.11 -m pip install boto3 websockets
+# Houdini's bundled Python version changes between releases, so resolve the
+# interpreter rather than hard-coding a minor version.
+HOUDINI_PYTHON=$(ls /opt/houdini/python/bin/python3.* 2>/dev/null \
+  | grep -E '/python3\.[0-9]+$' | sort -V | tail -n1)
+if [ -z "$HOUDINI_PYTHON" ]; then
+    echo "ERROR: no python3.x interpreter under /opt/houdini/python/bin"
+    exit 1
+fi
+"$HOUDINI_PYTHON" -m pip install boto3 websockets
 
 # Ensure proper ownership
 sudo chown -R ${USER_NAME}:${USER_NAME} ${USER_HOME}
