@@ -296,6 +296,37 @@ def _extract_templates(
         out[parm_path] = entry
 
 
+def _file_filter_for(tmpl) -> str:
+    """Return an ``accept`` string for a file parameter's browse dialog.
+
+    An explicit ``filechooser_pattern`` tag wins; otherwise the parameter's
+    file type gives a reasonable default. Returns '' when nothing sensible
+    applies, which leaves the browser accepting anything.
+    """
+    import hou
+
+    try:
+        pattern = (tmpl.tags() or {}).get("filechooser_pattern", "")
+        if pattern:
+            exts = [
+                tok.lstrip("*").strip()
+                for tok in pattern.replace(",", " ").split()
+                if "." in tok
+            ]
+            if exts:
+                return ",".join(exts)
+
+        by_type = {
+            hou.fileType.Geometry: ".bgeo,.bgeo.sc,.obj,.fbx,.abc,.usd,.usda,.usdc,.usdz,.ply,.stl",
+            hou.fileType.Image: ".exr,.png,.jpg,.jpeg,.tif,.tiff,.tga,.hdr,.rat",
+            hou.fileType.Clip: ".clip,.bclip",
+        }
+        return by_type.get(tmpl.fileType(), "")
+    except (AttributeError, hou.OperationFailed):
+        # Not every template exposes these - a missing filter is harmless.
+        return ""
+
+
 def _build_ui_hint(
     tmpl, schema_type: str, num_components: int
 ) -> Dict[str, Any]:
@@ -333,6 +364,8 @@ def _build_ui_hint(
         string_type = tmpl.stringType()
         if string_type == hou.stringParmType.FileReference:
             hint["control"] = "file_browser"
+            if file_filter := _file_filter_for(tmpl):
+                hint["file_filter"] = file_filter
         elif string_type == hou.stringParmType.NodeReference:
             hint["control"] = "text"  # node refs displayed as text
         else:

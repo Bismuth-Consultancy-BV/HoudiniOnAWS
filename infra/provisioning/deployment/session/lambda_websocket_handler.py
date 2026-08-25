@@ -312,20 +312,46 @@ def message_handler(event, context):
 
 
 def handle_request_upload_url(session, body, apigw_mgmt, connection_id):
-    """Generate a presigned URL for uploading HDA file to S3."""
+    """Generate a presigned URL for uploading a file to S3.
+
+    Two kinds of upload share this path, told apart by "purpose":
+
+      * "hda"   - the digital asset the session runs (the default). Its key is
+                  recorded on the session so the tool can be identified later.
+      * "asset" - a file picked for a file parameter. These land under an
+                  "assets/" prefix with a unique component so two files with
+                  the same name never overwrite each other, and they leave the
+                  session's HDA record untouched.
+    """
     session_id = session["session_id"]
-    filename = body.get("filename")
+    # Browsers only ever send a bare name, but never trust it into an S3 key.
+    filename = (body.get("filename") or "").replace("\\", "/").split("/")[-1].strip()
     content_type = body["content_type"]
+    purpose = body.get("purpose") or "hda"
+    request_id = body.get("request_id")
+
+    if not filename:
+        send_to_connection(
+            apigw_mgmt,
+            connection_id,
+            {"action": "error", "error": "Missing filename", "request_id": request_id},
+        )
+        return {"statusCode": 400, "body": "Missing filename"}
 
     if not INPUT_BUCKET:
         send_to_connection(
-            apigw_mgmt, connection_id, {"action": "error", "error": "S3 bucket not configured"}
+            apigw_mgmt,
+            connection_id,
+            {"action": "error", "error": "S3 bucket not configured", "request_id": request_id},
         )
         return {"statusCode": 500, "body": "S3 bucket not configured"}
 
     try:
-        # Generate S3 key: session_id/filename
-        s3_key = f"{session_id}/{filename}"
+        if purpose == "asset":
+            # Unique component keeps same-named files from different folders apart
+            s3_key = f"{session_id}/assets/{uuid.uuid4().hex[:8]}/{filename}"
+        else:
+            s3_key = f"{session_id}/{filename}"
 
         # Generate presigned URL for PUT operation (15 minute expiry)
         presigned_url = s3.generate_presigned_url(
@@ -334,18 +360,20 @@ def handle_request_upload_url(session, body, apigw_mgmt, connection_id):
             ExpiresIn=900,  # 15 minutes
         )
 
-        logger.info(f"Generated presigned URL for {s3_key}")
-        
-        # Update session with the S3 key for later use
-        table = dynamodb.Table(SESSIONS_TABLE)
-        table.update_item(
-            Key={"session_id": session_id},
-            UpdateExpression="SET s3_key = :key, hda_file = :file",
-            ExpressionAttributeValues={
-                ":key": s3_key,
-                ":file": filename
-            },
-        )
+        logger.info(f"Generated presigned URL for {s3_key} (purpose: {purpose})")
+
+        # Only an HDA upload defines what the session is running - a file
+        # parameter's asset must not clobber that record.
+        if purpose != "asset":
+            table = dynamodb.Table(SESSIONS_TABLE)
+            table.update_item(
+                Key={"session_id": session_id},
+                UpdateExpression="SET s3_key = :key, hda_file = :file",
+                ExpressionAttributeValues={
+                    ":key": s3_key,
+                    ":file": filename
+                },
+            )
 
         send_to_connection(
             apigw_mgmt,
@@ -356,6 +384,8 @@ def handle_request_upload_url(session, body, apigw_mgmt, connection_id):
                 "upload_url": presigned_url,
                 "s3_key": s3_key,
                 "bucket": INPUT_BUCKET,
+                "purpose": purpose,
+                "request_id": request_id,
             },
         )
 

@@ -22,8 +22,14 @@
  *   params.dispose();
  *
  * Events:
- *   'change'  — { paramPath, value, numComponents }
- *   'load'    — { schema, paramCount }
+ *   'change'      — { paramPath, value, numComponents }
+ *   'load'        — { schema, paramCount }
+ *   'fileselect'  — { paramPath, file }  a file parameter got a File chosen.
+ *                   The file still has to be made reachable by the session
+ *                   (uploaded) before the parameter can be set, so this module
+ *                   emits no 'change' for it; the host does the upload and
+ *                   sends the update itself. Call setFileStatus() to report
+ *                   progress back into the control.
  *
  * Extending:
  *   Subclass AuroraParameters and override createControl() to add or
@@ -49,6 +55,9 @@ export class AuroraParameters extends EventEmitter {
 
         /** Map of paramPath → DOM element */
         this._controls = {};
+
+        /** Map of paramPath → status <span> for file controls */
+        this._fileStatus = {};
     }
 
     /* ================================================================== */
@@ -108,7 +117,23 @@ export class AuroraParameters extends EventEmitter {
     clear() {
         this._container.innerHTML = '';
         this._controls = {};
+        this._fileStatus = {};
         this.schema = null;
+    }
+
+    /**
+     * Report upload progress on a file parameter's control.
+     *
+     * @param {string} paramPath
+     * @param {string} message — text to show, '' to clear.
+     * @param {string} [state='']  'busy' | 'ok' | 'error', used as a CSS
+     *                 modifier class on the status element.
+     */
+    setFileStatus(paramPath, message, state = '') {
+        const el = this._fileStatus[paramPath];
+        if (!el) return;
+        el.textContent = message || '';
+        el.className = 'param-file-status' + (state ? ` param-file-status-${state}` : '');
     }
 
     /**
@@ -414,14 +439,27 @@ export class AuroraParameters extends EventEmitter {
 
         const input = document.createElement('input');
         input.type = 'file';
+        if (paramDef.ui?.file_filter) input.accept = paramDef.ui.file_filter;
+
+        const status = document.createElement('span');
+        status.className = 'param-file-status';
+        // A file input cannot be given a value, so the parameter's current
+        // setting is shown as text instead.
+        if (typeof paramDef.default === 'string' && paramDef.default) {
+            status.textContent = paramDef.default;
+        }
+        this._fileStatus[paramPath] = status;
 
         input.addEventListener('change', () => {
-            if (input.files.length > 0) {
-                this._emitChange(paramPath, input.files[0].name, 1);
-            }
+            if (input.files.length === 0) return;
+            // The browser only hands us a File object — the session cannot
+            // reach it by name, so the host has to upload it before the
+            // parameter means anything. See the 'fileselect' event.
+            this._emit('fileselect', { paramPath, file: input.files[0] });
         });
 
         container.appendChild(input);
+        container.appendChild(status);
         return container;
     }
 }

@@ -2,7 +2,8 @@
  * Aurora Session — modular WebSocket session client for Houdini Aurora.
  *
  * Manages the WebSocket connection to the Aurora backend, session lifecycle,
- * command dispatch, and HDA file uploads via S3 presigned URLs.
+ * command dispatch, and file uploads (HDAs and file-parameter assets)
+ * via S3 presigned URLs.
  *
  * Usage:
  *   import { AuroraSession } from './aurora/session.js';
@@ -52,6 +53,9 @@ export class AuroraSession extends EventEmitter {
 
         /** @type {string|null} */
         this.sessionId = null;
+
+        /** @private — correlates concurrent upload-URL requests */
+        this._uploadSeq = 0;
     }
 
     /* ================================================================== */
@@ -145,7 +149,7 @@ export class AuroraSession extends EventEmitter {
     async uploadHDA(file) {
         try {
             // 1. Request presigned URL from the backend
-            const urlData = await this._requestUploadUrl(file);
+            const urlData = await this._requestUploadUrl(file, 'hda');
 
             // 2. PUT the file to S3
             const uploadResponse = await fetch(urlData.upload_url, {
@@ -177,18 +181,58 @@ export class AuroraSession extends EventEmitter {
     }
 
     /**
+     * Upload a file chosen for a file parameter to S3 via a presigned URL.
+     *
+     * Unlike uploadHDA() this does not tell the backend to do anything with
+     * the file — the caller passes the returned key to updateParameter(),
+     * and the session downloads it when it sets the parameter.
+     *
+     * @param {File} file — the file chosen by the user.
+     * @returns {Promise<{s3_key: string, filename: string}|null>} null on failure
+     */
+    async uploadAsset(file) {
+        try {
+            const urlData = await this._requestUploadUrl(file, 'asset');
+
+            const uploadResponse = await fetch(urlData.upload_url, {
+                method: 'PUT',
+                body: file,
+                headers: { 'Content-Type': file.type || 'application/octet-stream' }
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error(`Upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+            }
+
+            this._emit('log', { level: 'info', message: `Asset uploaded to S3: ${file.name}`, context: 'Client' });
+
+            return { s3_key: urlData.s3_key, filename: file.name };
+        } catch (error) {
+            console.error('[AuroraSession] Error uploading asset:', error);
+            this._emit('log', { level: 'error', message: `Failed to upload ${file.name}: ${error.message}`, context: 'Client' });
+            return null;
+        }
+    }
+
+    /**
      * Send a parameter update to the Houdini session.
      * @param {string}       paramPath
      * @param {*}            value
      * @param {number}       [numComponents=1]
+     * @param {object}       [opts]
+     * @param {string}       [opts.assetKey] — S3 key of an uploaded file, for
+     *                       file parameters. The session downloads it and sets
+     *                       the parameter to the resulting local path.
      */
-    updateParameter(paramPath, value, numComponents = 1) {
-        this.send({
+    updateParameter(paramPath, value, numComponents = 1, opts = {}) {
+        const message = {
             action: 'update_parameter',
             param: paramPath,
             value,
             num_components: numComponents
-        });
+        };
+        if (opts.assetKey) message.asset_key = opts.assetKey;
+        this.send(message);
     }
 
     /**
@@ -305,8 +349,17 @@ export class AuroraSession extends EventEmitter {
     /*  Internal helpers                                                   */
     /* ================================================================== */
 
-    /** @private — ask backend for a presigned S3 upload URL */
-    _requestUploadUrl(file) {
+    /**
+     * @private — ask backend for a presigned S3 upload URL.
+     * @param {File}   file
+     * @param {string} [purpose='hda'] — 'hda' or 'asset'; decides where the
+     *                 file lands and whether it becomes the session's HDA.
+     */
+    _requestUploadUrl(file, purpose = 'hda') {
+        // File parameters can start several uploads at once, so responses are
+        // matched to their request rather than taken first-come.
+        const requestId = `up-${++this._uploadSeq}`;
+
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(
                 () => reject(new Error('Timeout waiting for upload URL')),
@@ -315,6 +368,9 @@ export class AuroraSession extends EventEmitter {
 
             const handler = (event) => {
                 const data = JSON.parse(event.data);
+                // Ignore replies belonging to another in-flight upload
+                if (data.request_id && data.request_id !== requestId) return;
+
                 if (data.action === 'upload_url_ready') {
                     clearTimeout(timeout);
                     this._ws.removeEventListener('message', handler);
@@ -331,7 +387,9 @@ export class AuroraSession extends EventEmitter {
             this.send({
                 action: 'request_upload_url',
                 filename: file.name,
-                content_type: file.type || 'application/octet-stream'
+                content_type: file.type || 'application/octet-stream',
+                purpose,
+                request_id: requestId
             });
         });
     }

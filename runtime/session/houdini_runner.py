@@ -63,6 +63,8 @@ class HoudiniRunner:
         # Set while installing an HDA - see _note_compatibility_warning().
         self._compat_warning_count = 0
         self._compat_samples = []
+        # s3 key -> local path for files fetched for file parameters
+        self._asset_cache = {}
 
         logger.info(f"Initializing Houdini runner for session {session_id}")
         logger.info(f"Session HIP: {session_hip}")
@@ -333,11 +335,50 @@ class HoudiniRunner:
             self.hda_node = None
             return {"error": f"Failed to extract parameters: {str(e)}"}
 
+    def fetch_asset(self, asset_key: str) -> str:
+        """Download a file-parameter asset from S3 and return its local path.
+
+        Houdini resolves file parameters on this machine, so a name picked in
+        the browser is meaningless until the file itself is here. Each key is
+        downloaded once and reused; keys carry a unique component, so a cache
+        hit really is the same file.
+        """
+        cached = self._asset_cache.get(asset_key)
+        if cached and os.path.exists(cached):
+            logger.info(f"Asset already local: {cached}")
+            return cached
+
+        input_bucket = self.input_bucket or os.environ.get("INPUT_BUCKET")
+        if not input_bucket:
+            raise RuntimeError("INPUT_BUCKET not configured - cannot download asset.")
+
+        # Mirror the key's unique component into the local path so two files
+        # sharing a name stay apart on disk too.
+        parts = [p for p in asset_key.split("/") if p and p != ".."]
+        filename = parts[-1]
+        unique = parts[-2] if len(parts) > 1 else "asset"
+        asset_dir = os.path.join(
+            os.environ.get("DATA_ROOT", "/tmp"), "assets", unique
+        )
+        os.makedirs(asset_dir, exist_ok=True)
+        local_path = os.path.join(asset_dir, filename)
+
+        logger.info(f"Downloading asset from s3://{input_bucket}/{asset_key}")
+        download_start = time.time()
+        self.s3_client.download_file(input_bucket, asset_key, local_path)
+        logger.info(
+            f"Asset downloaded in {time.time() - download_start:.2f}s: {local_path}"
+        )
+
+        self._asset_cache[asset_key] = local_path
+        return local_path
+
     def update_parameter(self, command: dict) -> dict:
         """Update a Houdini parameter and export resulting geometry."""
         param_path = command.get("param")
         value = command.get("value")
         num_components = command.get("num_components", 1)
+        asset_key = command.get("asset_key")
 
         if not param_path or value is None:
             return {"error": "Missing param or value"}
@@ -345,6 +386,21 @@ class HoudiniRunner:
         try:
             update_start = time.time()
             logger.info(f"--- Parameter Update Start: {param_path} ---")
+
+            # File parameters arrive as an S3 key plus the name the user saw.
+            # Fetch the file and point the parameter at the local copy.
+            if asset_key:
+                try:
+                    value = self.fetch_asset(asset_key)
+                except Exception as e:
+                    logger.error(f"Failed to fetch asset {asset_key}: {e}")
+                    return {
+                        "action": "geometry_ready",
+                        "status": "error",
+                        "error": f"Failed to fetch file for {param_path}: {e}",
+                        "param": param_path,
+                    }
+                num_components = 1
 
             # Multi-component parameters (vectors, colors) arrive as lists
             if isinstance(value, list) and num_components > 1:

@@ -296,7 +296,29 @@ export class AuroraApp extends EventEmitter {
                 this._showGeometryLoader();
                 this._session.updateParameter(paramPath, value, numComponents);
             });
+            this._paramUI.on('fileselect', ({ paramPath, file }) => {
+                this._uploadParameterFile(paramPath, file);
+            });
         }
+    }
+
+    /**
+     * @private — a file parameter got a file: upload it, then set the
+     * parameter to the uploaded key so the session can fetch it.
+     */
+    async _uploadParameterFile(paramPath, file) {
+        this._paramUI.setFileStatus(paramPath, `Uploading ${file.name}…`, 'busy');
+        this._addLog('info', `Uploading ${file.name} for ${paramPath}`, 'Client');
+
+        const asset = await this._session.uploadAsset(file);
+        if (!asset) {
+            this._paramUI.setFileStatus(paramPath, `Upload failed — ${file.name}`, 'error');
+            return;
+        }
+
+        this._paramUI.setFileStatus(paramPath, file.name, 'ok');
+        this._showGeometryLoader();
+        this._session.updateParameter(paramPath, file.name, 1, { assetKey: asset.s3_key });
     }
 
     /** @private */

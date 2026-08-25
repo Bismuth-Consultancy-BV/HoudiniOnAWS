@@ -188,6 +188,26 @@ body {
     font-size: 0.9em;
 }
 
+.param-file-status {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.85em;
+    color: #718096;
+    word-break: break-all;
+}
+
+.param-file-status-busy {
+    color: #4a5568;
+}
+
+.param-file-status-ok {
+    color: #2f855a;
+}
+
+.param-file-status-error {
+    color: #c53030;
+}
+
 .geometry-viewer {
     flex: 1;
     width: 100%;
